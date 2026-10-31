@@ -90,7 +90,7 @@ def repair_truncated_json(text: str) -> str:
 
 
 class LlamaCppBackend:
-    def __init__(self, model_path: str | Path, n_ctx: int = 4096,
+    def __init__(self, model_path: str | Path, n_ctx: int = 6144,
                  n_threads: int | None = None, n_gpu_layers: int = 0):
         try:
             from llama_cpp import Llama
@@ -114,7 +114,8 @@ class LlamaCppBackend:
         if self.no_think:
             messages = [*messages[:-1],
                         {**messages[-1], "content": messages[-1]["content"] + " /no_think"}]
-        kwargs = {}
+        # 같은 말을 되풀이하는 것을 조금 억제한다(작은 모델에서 흔함).
+        kwargs = {"repeat_penalty": 1.1}
         if json_schema is not None:
             # 문법 제약으로 작은 모델도 형식이 깨지지 않은 JSON을 내게 한다.
             kwargs["response_format"] = {"type": "json_object", "schema": json_schema}

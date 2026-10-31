@@ -122,19 +122,24 @@ def _attachment_text(a: str) -> str:
     return a + "."
 
 
-# 작은 모델도 지킬 수 있게 두 단계까지만 받는다(더 깊은 단계는 render가 지원).
+# 작은 모델도 지킬 수 있게 두 단계까지만 받고(더 깊은 단계는 render가 지원),
+# 글자 수·항목 수의 상한을 문법으로 강제해 같은 말을 되풀이하며 길어지지 않게 한다.
+def _text(max_len: int) -> dict:
+    return {"type": "string", "maxLength": max_len}
+
+
 SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string"},
-        "recipient": {"type": "string"},
-        "related": {"type": "array", "items": {"type": "string"}},
-        "items": {"type": "array", "items": {
+        "title": _text(40),
+        "recipient": _text(30),
+        "related": {"type": "array", "items": _text(80), "maxItems": 3},
+        "items": {"type": "array", "minItems": 1, "maxItems": 5, "items": {
             "type": "object",
-            "properties": {"text": {"type": "string"},
-                           "sub": {"type": "array", "items": {"type": "string"}}},
+            "properties": {"text": _text(100),
+                           "sub": {"type": "array", "items": _text(80), "maxItems": 4}},
             "required": ["text", "sub"]}},
-        "attachments": {"type": "array", "items": {"type": "string"}},
+        "attachments": {"type": "array", "items": _text(40), "maxItems": 3},
     },
     "required": ["title", "recipient", "related", "items", "attachments"],
 }

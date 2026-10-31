@@ -122,27 +122,36 @@ class Report:
         return "\n".join(lines).rstrip()
 
 
-_STR_LIST = {"type": "array", "items": {"type": "string"}}
+def _text(max_len: int) -> dict:
+    return {"type": "string", "maxLength": max_len}
+
+
+def _list(max_len: int, max_items: int, min_items: int = 0) -> dict:
+    return {"type": "array", "items": _text(max_len), "minItems": min_items, "maxItems": max_items}
+
+
+# 글자 수와 항목 수의 상한을 문법으로 강제한다. 작은 모델이 같은 말을 되풀이하며 끝없이 쓰는 것을 막고,
+# 저사양 PC에서도 작성 시간이 일정하게 짧도록 하기 위해서다(A4 2쪽 안팎).
 SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string"},
-        "summary": _STR_LIST,
-        "sections": {"type": "array", "items": {
+        "title": _text(40),
+        "summary": _list(60, 4, 2),
+        "sections": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
-                "subs": {"type": "array", "items": {
+                "title": _text(20),
+                "subs": {"type": "array", "minItems": 1, "maxItems": 2, "items": {
                     "type": "object",
                     "properties": {
-                        "heading": {"type": "string"},
-                        "paragraphs": _STR_LIST,
-                        "bullets": _STR_LIST,
-                        "notes": _STR_LIST,
+                        "heading": _text(20),
+                        "paragraphs": _list(150, 1),
+                        "bullets": _list(60, 4, 1),
+                        "notes": _list(60, 1),
                         "table": {"type": "object", "properties": {
-                            "title": {"type": "string"},
-                            "columns": _STR_LIST,
-                            "rows": {"type": "array", "items": _STR_LIST}},
+                            "title": _text(20),
+                            "columns": _list(10, 5),
+                            "rows": {"type": "array", "maxItems": 5, "items": _list(20, 5)}},
                             "required": ["title", "columns", "rows"]},
                     },
                     "required": ["heading", "paragraphs", "bullets", "notes", "table"]}},

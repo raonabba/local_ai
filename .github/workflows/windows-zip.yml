@@ -24,10 +24,18 @@ jobs:
       - name: 도구 설치
         run: python -m pip install --upgrade pip pyinstaller python-hwpx pypdf
 
+      # 엔진 빌드는 10분 넘게 걸리므로, 버전·빌드 설정·패치가 같으면 만들어 둔 것을 다시 쓴다.
+      - uses: actions/cache@v4
+        id: engine-cache
+        with:
+          path: wheels
+          key: llama-cpp-python-0.3.36-cpu-all-variants-${{ hashFiles('packaging/patch_llama_cpp.py') }}
+
       - name: AI 엔진(llama.cpp) 빌드
         # 공공기관 저사양 PC(AVX2가 없는 구형·보급형 CPU 포함)에서도 돌도록 CPU 세대별 엔진을 모두 만들고,
         # 실행할 때 그 PC에 맞는 것을 고른다(gongmun_ai.llm.load_cpu_backend).
         # llama-cpp-python은 세대별 엔진을 패키지에 넣지 않으므로 소스를 받아 설치 규칙을 고친 뒤 빌드한다.
+        if: steps.engine-cache.outputs.cache-hit != 'true'
         env:
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
         shell: bash
@@ -35,7 +43,12 @@ jobs:
           python -m pip download --no-deps --no-binary :all: llama-cpp-python==0.3.36 -d llsrc
           tar xzf llsrc/llama_cpp_python-0.3.36.tar.gz -C llsrc
           python packaging/patch_llama_cpp.py llsrc/llama_cpp_python-0.3.36
-          python -m pip install --no-cache-dir ./llsrc/llama_cpp_python-0.3.36
+          python -m pip wheel --no-deps --no-cache-dir ./llsrc/llama_cpp_python-0.3.36 -w wheels
+
+      - name: AI 엔진 설치
+        shell: bash
+        run: |
+          python -m pip install wheels/llama_cpp_python-*.whl
           ls "$(python -c 'import llama_cpp,os;print(os.path.dirname(llama_cpp.__file__))')/lib"
 
       - name: 프로그램 설치와 테스트
