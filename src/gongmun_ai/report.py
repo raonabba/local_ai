@@ -62,6 +62,14 @@ class Report:
             sections.append(Section(str(s.get("title", "")).strip(), subs))
         return cls(str(d.get("title", "")).strip(), strs(d.get("summary")), sections)
 
+    def drop_trivial_tables(self) -> None:
+        """한두 칸짜리 표(예: 시작일 | 종료일 한 줄)는 항목과 같은 말이라 뺀다. 작은 모델이 절마다 표를 붙이는 버릇이 있다."""
+        for s in self.sections:
+            for sub in s.subs:
+                t = sub.table
+                if t and (len(t.rows) < 2 or len(t.columns) < 2):
+                    sub.table = Table()
+
     def merge_duplicate_headings(self) -> None:
         """한 장 안에서 같은 소제목이 되풀이되면(작은 모델에서 흔함) 하나로 합친다."""
         for s in self.sections:
@@ -151,7 +159,7 @@ SCHEMA = {
                         "table": {"type": "object", "properties": {
                             "title": _text(20),
                             "columns": _list(10, 5),
-                            "rows": {"type": "array", "maxItems": 5, "items": _list(20, 5)}},
+                            "rows": {"type": "array", "maxItems": 5, "items": _list(30, 5)}},
                             "required": ["title", "columns", "rows"]},
                     },
                     "required": ["heading", "paragraphs", "bullets", "notes", "table"]}},

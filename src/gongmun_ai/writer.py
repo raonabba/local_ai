@@ -173,7 +173,7 @@ def draft_report(backend: Backend, request: str, profile: Profile | None = None,
         "- subs: heading은 짧은 소제목이며 다른 절과 겹치지 않게 쓴다. "
         "내용은 bullets(○ 항목, 한 줄씩 짧게, '- '로 시작하면 하위 항목) 위주로 쓰고, "
         "paragraphs(서술 문단)는 꼭 필요할 때만 한 문단. notes는 ※ 참고 사항(※는 빼고)\n"
-        "- table: 일정·인원·예산처럼 표가 알맞을 때만 columns와 rows를 채우고, 아니면 모두 빈 값\n"
+        "- table: 일정·인원·예산처럼 여러 줄을 견줄 때만, 보고서 전체에서 1~2개만 쓴다. 나머지 절은 모두 빈 값\n"
         "- 모든 문장은 '~함', '~임', '~할 계획임'처럼 명사형으로 끝낸다('~합니다' 금지)\n"
         "- 장·절 번호(Ⅰ, 1.)는 쓰지 마세요. 서식은 프로그램이 붙입니다\n"
         "- 참고 문서에 없는 숫자·인명은 쓰지 말고 '○○'으로 비워 두세요."
@@ -182,6 +182,7 @@ def draft_report(backend: Backend, request: str, profile: Profile | None = None,
                        json_schema=REPORT_SCHEMA, max_tokens=2500, temperature=0.4)
     rep = Report.from_dict(parse_json(out))
     rep.merge_duplicate_headings()
+    rep.drop_trivial_tables()
     rep.map_text(lambda t: autofix(t, official=False)[0])
 
     source = request + "\n" + "\n".join(body for _, body in references)
