@@ -169,6 +169,7 @@ def draft_report(backend: Backend, request: str, profile: Profile | None = None,
         "- title: 표지에 들어갈 보고서 제목(예: '2026년 ○○ 추진 계획')\n"
         "- summary: 표지 요약 상자 2~4줄. 첫 줄은 '~ 보고임.'으로 끝내고, 다음 줄은 '기간: ~', '대상: ~'처럼 쓴다\n"
         "- sections: 3개 장(예: 개요, 추진 계획, 행정 사항). 장마다 subs(절) 1~2개\n"
+        "- 분량: 절마다 bullets 2~4개, 각 항목은 40자 이내로 짧게(전체가 A4 2쪽을 넘지 않게)\n"
         "- subs: heading은 짧은 소제목이며 다른 절과 겹치지 않게 쓴다. "
         "내용은 bullets(○ 항목, 한 줄씩 짧게, '- '로 시작하면 하위 항목) 위주로 쓰고, "
         "paragraphs(서술 문단)는 꼭 필요할 때만 한 문단. notes는 ※ 참고 사항(※는 빼고)\n"
@@ -178,7 +179,7 @@ def draft_report(backend: Backend, request: str, profile: Profile | None = None,
         "- 참고 문서에 없는 숫자·인명은 쓰지 말고 '○○'으로 비워 두세요."
     )
     out = backend.chat(_messages(prompt, profile, ("principles", "structure"), learned),
-                       json_schema=REPORT_SCHEMA, max_tokens=2000, temperature=0.4)
+                       json_schema=REPORT_SCHEMA, max_tokens=-1, temperature=0.4)  # -1: 남은 문맥 끝까지
     rep = Report.from_dict(parse_json(out))
     rep.merge_duplicate_headings()
     rep.map_text(lambda t: autofix(t, official=False)[0])

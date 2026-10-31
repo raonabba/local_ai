@@ -223,6 +223,24 @@ class KnowledgeTest(unittest.TestCase):
 
 
 class LlmTest(unittest.TestCase):
+    def test_truncated_report_json_is_salvaged(self):
+        from gongmun_ai.report import Report
+        full = json.dumps({"title": "교육 계획", "summary": ["보고임."], "sections": [
+            {"title": "개요", "subs": [{"heading": "목적", "paragraphs": [], "bullets": ["역량 향상", "안전 의식 \\ \"강화\""],
+                                      "notes": [], "table": {"title": "", "columns": [], "rows": []}}]},
+            {"title": "추진 계획", "subs": [{"heading": "일정", "paragraphs": [], "bullets": ["3월 시행"],
+                                         "notes": [], "table": {"title": "", "columns": [], "rows": []}}]}]},
+                          ensure_ascii=False)
+        cut_in_value = full[:full.index("3월 시행") + 2]       # 값 문자열 한가운데서 끊김(CI에서 본 경우)
+        cut_after_key = full[:full.index('"heading": "일정"') + 10]  # 이름 뒤에서 끊김
+        for cut in (cut_in_value, cut_after_key, full[:-3]):
+            rep = Report.from_dict(parse_json(cut))
+            self.assertEqual(rep.title, "교육 계획")
+            self.assertEqual(rep.sections[0].subs[0].bullets, ["역량 향상", '안전 의식 \\ "강화"'])
+        self.assertEqual(Report.from_dict(parse_json(full[:-3])).sections[1].subs[0].bullets, ["3월 시행"])
+        with self.assertRaises(ValueError):
+            parse_json('{"tit')
+
     def test_parse_json(self):
         self.assertEqual(parse_json('설명입니다 {"a": 1} 끝'), {"a": 1})
         self.assertEqual(clean_output("<think>x</think>\n답"), "답")

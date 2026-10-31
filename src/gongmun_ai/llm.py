@@ -32,15 +32,61 @@ def clean_output(text: str) -> str:
 
 
 def parse_json(text: str) -> dict:
-    """모델 출력에서 JSON 객체를 꺼낸다(앞뒤 잡담이 붙어도 처리)."""
+    """모델 출력에서 JSON 객체를 꺼낸다(앞뒤 잡담이 붙거나, 길이 제한에 걸려 중간에 끊겨도 처리)."""
     text = clean_output(text)
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("AI가 문서 내용을 만들지 못했습니다. 요청을 조금 더 구체적으로 써 주세요.")
     try:
-        return json.loads(text)
+        return json.loads(text[start:])
     except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end <= start:
-            raise ValueError("모델 출력에서 JSON을 찾지 못했습니다.") from None
-        return json.loads(text[start:end + 1])
+        pass
+    end = text.rfind("}")
+    if end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+    return json.loads(repair_truncated_json(text[start:]))
+
+
+def repair_truncated_json(text: str) -> str:
+    """중간에 끊긴 JSON을, 마지막으로 온전히 끝난 값까지 남기고 괄호를 닫아 되살린다."""
+    stack: list[str] = []
+    safe_end, safe_stack = 0, []
+    in_string = escaped = False
+    string_is_value = False
+    last_token = ""  # 문자열 밖에서 마지막으로 본 구두점
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+                if string_is_value:
+                    safe_end, safe_stack = i + 1, list(stack)
+                last_token = '"'
+            continue
+        if ch == '"':
+            in_string = True
+            # 배열 안의 문자열이나 ':' 뒤의 문자열은 값, 그 밖(객체의 이름)은 값이 아니다.
+            string_is_value = bool(stack) and (stack[-1] == "[" or last_token == ":")
+        elif ch in "{[":
+            stack.append(ch)
+            last_token = ch
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            safe_end, safe_stack = i + 1, list(stack)
+            last_token = ch
+        elif ch in ",:":
+            last_token = ch
+    if safe_end == 0:
+        raise ValueError("AI가 만든 문서 내용이 너무 짧게 끊겼습니다. 다시 시도해 주세요.")
+    closers = "".join("}" if c == "{" else "]" for c in reversed(safe_stack))
+    return text[:safe_end] + closers
 
 
 class LlamaCppBackend:
