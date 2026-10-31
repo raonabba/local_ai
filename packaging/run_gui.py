@@ -41,7 +41,13 @@ def self_test() -> int:
 
     def engine():
         import llama_cpp
-        return f"llama-cpp-python {llama_cpp.__version__}"
+        from gongmun_ai.llm import load_cpu_backend
+        lib = Path(llama_cpp.__file__).parent / "lib"
+        variants = sorted(p.stem.removeprefix("ggml-cpu-") for p in lib.glob("ggml-cpu-*.dll"))
+        if sys.platform == "win32" and len(variants) < 4:
+            raise RuntimeError(f"CPU 세대별 엔진이 빠졌습니다: {variants}")
+        return (f"llama-cpp-python {llama_cpp.__version__}, 이 PC 엔진 {load_cpu_backend()}, "
+                f"포함된 CPU 세대별 엔진 {len(variants)}종({', '.join(variants)})")
 
     def gui():
         import tkinter
