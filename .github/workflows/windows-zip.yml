@@ -12,6 +12,8 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"  # 러너 콘솔(cp1252)에서도 한글 로그가 깨지거나 멈추지 않게
     steps:
       - uses: actions/checkout@v4
 
