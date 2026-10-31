@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from .gianmun import SCHEMA, Gianmun
+from .report import SCHEMA as REPORT_SCHEMA, Report
 from .knowledge import prompt_guide
 from .llm import Backend, clean_output, parse_json
 from .profiles import Profile
@@ -74,11 +75,29 @@ def fact_warnings(source: str, output: str) -> list[str]:
 # ---------------------------------------------------------------- 작업
 
 def _messages(user: str, profile: Profile | None,
-              guide: tuple[str, ...] = ("principles",)) -> list[dict]:
+              guide: tuple[str, ...] = ("principles",), learned: str = "") -> list[dict]:
     system = SYSTEM + "\n\n" + prompt_guide(guide)
+    if learned:
+        system += f"\n\n{learned}"
     if profile:
         system += f"\n\n{profile.to_prompt()}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _with_knowledge(request: str, references: list[tuple[str, str]] | None, kb) -> tuple[list, str]:
+    """사용자가 고른 참고 문서에 지식 DB에서 찾은 관련 문단과 배운 문서 습관을 더한다."""
+    refs = list(references or [])
+    if kb is None:
+        return refs, ""
+    refs += [(f"학습한 문서: {name}", text) for name, text in kb.search(request, k=3)]
+    return refs, kb.style_hints()
+
+
+def _reference_block(references: list[tuple[str, str]]) -> str:
+    if not references:
+        return ""
+    budget = MAX_REFERENCE_CHARS // len(references)
+    return "\n\n[참고 문서]\n" + "\n\n".join(f"<{name}>\n{body[:budget]}" for name, body in references)
 
 
 def _finish(source: str, output: str, profile: Profile | None, official: bool,
@@ -115,15 +134,11 @@ def ai_proofread(backend: Backend, text: str, official: bool = True) -> Result:
 
 def draft(backend: Backend, request: str, profile: Profile | None = None,
           references: list[tuple[str, str]] | None = None,
-          tone: str = "보고서") -> tuple[Gianmun, Result]:
-    """요청과 참고 문서로 기안문 초안을 만든다. references는 (이름, 내용) 목록."""
-    ref_block = ""
-    if references:
-        budget = MAX_REFERENCE_CHARS // len(references)
-        ref_block = "\n\n[참고 문서]\n" + "\n\n".join(
-            f"<{name}>\n{body[:budget]}" for name, body in references)
+          tone: str = "보고서", kb=None) -> tuple[Gianmun, Result]:
+    """요청과 참고 문서로 기안문 초안을 만든다. references는 (이름, 내용) 목록, kb는 지식 DB."""
+    references, learned = _with_knowledge(request, references, kb)
     prompt = (
-        f"다음 요청에 맞는 기안문 내용을 JSON으로 작성하세요.\n[요청]\n{request}{ref_block}\n\n"
+        f"다음 요청에 맞는 기안문 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references)}\n\n"
         "작성 방법:\n"
         "- title: 한 가지 안건만 담고 본문 전체를 포괄하는 짧은 제목\n"
         "- recipient: 수신자(내부 보고면 '내부결재')\n"
@@ -134,12 +149,38 @@ def draft(backend: Backend, request: str, profile: Profile | None = None,
         "- 항목 번호(1., 가.)와 '끝.'은 쓰지 마세요. 서식은 프로그램이 붙입니다.\n"
         "- 참고 문서에 없는 숫자는 쓰지 말고 '○○'으로 비워 두세요."
     )
-    out = backend.chat(_messages(prompt, profile, ("principles", "structure", "words")),
-                       json_schema=SCHEMA,
-                       max_tokens=1500, temperature=0.4)
+    out = backend.chat(_messages(prompt, profile, ("principles", "structure", "words"), learned),
+                       json_schema=SCHEMA, max_tokens=1500, temperature=0.4)
     doc = Gianmun.from_dict(parse_json(out))
     doc.map_text(lambda t: autofix(t, official=False)[0])
 
-    source = request + "\n" + "\n".join(body for _, body in references or [])
+    source = request + "\n" + "\n".join(body for _, body in references)
     result = _finish(source, doc.render(), profile, official=True, facts=doc.content())
     return doc, result
+
+
+def draft_report(backend: Backend, request: str, profile: Profile | None = None,
+                 references: list[tuple[str, str]] | None = None, kb=None) -> tuple[Report, Result]:
+    """붙임용 보고서(표지 + Ⅰ·Ⅱ·Ⅲ 장) 초안."""
+    references, learned = _with_knowledge(request, references, kb)
+    prompt = (
+        f"다음 요청에 맞는 보고서 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references)}\n\n"
+        "작성 방법:\n"
+        "- title: 표지에 들어갈 보고서 제목(예: '2026년 ○○ 추진 계획')\n"
+        "- summary: 표지 요약 상자 2~4줄. 첫 줄은 '~ 보고임.'으로 끝내고, 다음 줄은 '기간: ~', '대상: ~'처럼 쓴다\n"
+        "- sections: 3~4개 장(예: 개요, 추진 계획, 행정 사항). 장마다 subs(절)를 1~3개\n"
+        "- subs: heading은 짧은 소제목, paragraphs는 서술 문단, bullets는 ○ 항목('- '로 시작하면 하위 항목), "
+        "notes는 ※ 참고 사항(※는 빼고)\n"
+        "- table: 일정·인원·예산처럼 표가 알맞을 때만 columns와 rows를 채우고, 아니면 모두 빈 값\n"
+        "- 문장은 '~함', '~임', '~할 계획임'처럼 명사형으로 끝낸다\n"
+        "- 장·절 번호(Ⅰ, 1.)는 쓰지 마세요. 서식은 프로그램이 붙입니다\n"
+        "- 참고 문서에 없는 숫자·인명은 쓰지 말고 '○○'으로 비워 두세요."
+    )
+    out = backend.chat(_messages(prompt, profile, ("principles", "structure"), learned),
+                       json_schema=REPORT_SCHEMA, max_tokens=2500, temperature=0.4)
+    rep = Report.from_dict(parse_json(out))
+    rep.map_text(lambda t: autofix(t, official=False)[0])
+
+    source = request + "\n" + "\n".join(body for _, body in references)
+    result = _finish(source, rep.to_text(), profile, official=False, facts=rep.content())
+    return rep, result

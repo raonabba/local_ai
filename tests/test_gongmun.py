@@ -2,6 +2,8 @@ import json
 import socket
 import tempfile
 import unittest
+import zipfile
+from xml.etree import ElementTree
 from pathlib import Path
 
 from gongmun_ai import proofread, writer
@@ -240,30 +242,161 @@ class SecurityTest(unittest.TestCase):
 
 
 class GuiTest(unittest.TestCase):
-    def test_proofread_tab(self):
+    def test_proofread_and_sample_tabs(self):
         try:
             import tkinter as tk
             root = tk.Tk()
         except Exception as e:  # tkinter가 없거나 화면이 없는 환경
             self.skipTest(f"화면 없음: {e}")
         from gongmun_ai import gui
+        old_kb = gui.KB_PATH
         try:
-            gui.App(root)
+            with tempfile.TemporaryDirectory() as d:
+                gui.KB_PATH = Path(d) / "k.db"
+                gui.App(root)
 
-            def find(w, cls):
-                for c in w.winfo_children():
-                    yield from ([c] if isinstance(c, cls) else [])
-                    yield from find(c, cls)
+                def find(w, cls):
+                    for c in w.winfo_children():
+                        yield from ([c] if isinstance(c, cls) else [])
+                        yield from find(c, cls)
 
-            buttons = {b.cget("text"): b for b in find(root, gui.ttk.Button)}
-            buttons["예시 글 넣기"].invoke()
-            buttons["교정하기 (AI 없이 즉시)"].invoke()
-            result = next(find(root, tk.Text))  # 첫 탭의 입력
-            texts = list(find(root, tk.Text))
-            self.assertIn("2025. 3. 4.(화) 14:30~17:00", texts[1].get("1.0", "end"))
-            self.assertTrue(result.tag_ranges("fix"))
+                nb = next(find(root, gui.ttk.Notebook))
+                tabs = [root.nametowidget(t) for t in nb.tabs()]
+                draft, proof = tabs[0], tabs[1]
+
+                buttons = {b.cget("text"): b for b in find(proof, gui.ttk.Button)}
+                buttons["예시 글 넣기"].invoke()
+                buttons["교정하기 (AI 없이 즉시)"].invoke()
+                src, out = list(find(proof, tk.Text))[:2]
+                self.assertIn("2025. 3. 4.(화) 14:30~17:00", out.get("1.0", "end"))
+                self.assertTrue(src.tag_ranges("fix"))
+
+                {b.cget("text"): b for b in find(draft, gui.ttk.Button)}["예시 문서 보기 (AI 없이)"].invoke()
+                self.assertIn("국정감사", list(find(draft, tk.Text))[1].get("1.0", "end"))
+                root.destroy()
         finally:
-            root.destroy()
+            gui.KB_PATH = old_kb
+
+
+class HwpxTest(unittest.TestCase):
+    def test_writer_roundtrip(self):
+        from gongmun_ai.hwpx import Cell, HwpxWriter, read_text
+        w = HwpxWriter()
+        w.paragraph("제목 & <특수문자>", w.char(16, True, "HY헤드라인M"), w.para("CENTER"))
+        w.table([[Cell("소속", fill="#D9D9D9"), Cell("성명")],
+                 [Cell("기획조정실", rowspan=2), Cell("홍길동")],
+                 [None, Cell("김철수")]], [40, 40], header_rows=1)
+        with tempfile.TemporaryDirectory() as d:
+            path = w.save(Path(d) / "t.hwpx")
+            with zipfile.ZipFile(path) as z:
+                self.assertEqual(z.namelist()[0], "mimetype")
+                self.assertEqual(z.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+                for name in z.namelist():
+                    if name.endswith((".xml", ".hpf")):
+                        ElementTree.fromstring(z.read(name))  # 잘 짜인 XML인지
+                header = z.read("Contents/header.xml").decode()
+            self.assertIn('face="HY헤드라인M"', header)
+            text = read_text(path)
+        self.assertIn("제목 & <특수문자>", text)
+        self.assertIn("소속 | 성명", text)
+        self.assertIn("기획조정실 | 홍길동", text)
+
+    def test_image_size(self):
+        from gongmun_ai.hwpx import _image_size
+        png = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (300).to_bytes(4, "big") + (200).to_bytes(4, "big")
+        self.assertEqual(_image_size(png), ("png", (300, 200)))
+        with self.assertRaises(ValueError):
+            _image_size(b"GIF89a")
+
+    def test_layouts(self):
+        from gongmun_ai.examples import sample_gianmun, sample_report
+        from gongmun_ai.hwpx import read_text
+        from gongmun_ai.layouts import gianmun_hwpx, report_hwpx, text_hwpx
+        from gongmun_ai.settings import Settings
+        s = Settings(org="국방부", approvers=["과장", "국장"])
+        with tempfile.TemporaryDirectory() as d:
+            gian = read_text(gianmun_hwpx(sample_gianmun(), s).save(Path(d) / "g.hwpx"))
+            rep = read_text(report_hwpx(sample_report(), s).save(Path(d) / "r.hwpx"))
+            txt = read_text(text_hwpx("1. 하나\n  가. 둘  끝.", s).save(Path(d) / "t.hwpx"))
+        self.assertIn("붙임  2026년 국정감사 수감 준비 계획 1부.  끝.", gian)
+        self.assertIn("국방부장관", gian)
+        self.assertIn("기안자 | 검토자 과장 | 결재권자 국장", gian)
+        self.assertIn("등록번호 |", rep)
+        self.assertIn("Ⅰ | 감사 개요", rep)
+        self.assertIn("국 방 부", rep)
+        self.assertIn("소 속 | 직 위 | 성 명 | 비 고", rep)
+        self.assertIn("가. 둘  끝.", txt)
+
+
+class LearningTest(unittest.TestCase):
+    REPORT = ("Ⅰ. 개요\n1. 추진 배경\n국정감사 수감 준비를 위해 부서별 답변 자료를 정리함.\n"
+              "2. 추진 일정\n일자 | 기관 | 장소\n10. 1. | ○○사단 | ○○\n※ 세부 일정은 따로 알림")
+
+    def test_grams(self):
+        from gongmun_ai.learning import grams
+        self.assertEqual(grams("국정감사 AI 2026"), "국정 정감 감사 ai 2026")
+
+    def test_learn_search_share_forget(self):
+        from gongmun_ai.learning import KnowledgeBase
+        with tempfile.TemporaryDirectory() as d:
+            kb = KnowledgeBase(Path(d) / "a.db")
+            report = kb.learn_texts([("작년보고.txt", self.REPORT)])
+            self.assertEqual(report.learned, [("작년보고.txt", "보고서")])
+            self.assertIn("추진 배경", report.new_headings)
+            self.assertIn("일자 | 기관 | 장소", report.new_tables)
+            self.assertIn("학습했습니다", report.message())
+            self.assertEqual(kb.search("감사 준비")[0][0], "작년보고.txt")
+            self.assertIn("추진 배경", kb.style_hints())
+            self.assertEqual(kb.learn_texts([("사본.txt", self.REPORT)]).duplicates, ["사본.txt"])
+
+            other = KnowledgeBase(Path(d) / "b.db")
+            other.learn_texts([("다른PC.txt", "Ⅰ. 개요\n1. 기대 효과\n업무 시간이 줄어듦.")])
+            kb.export(Path(d) / "a.gkb")
+            merged = other.import_package(Path(d) / "a.gkb")
+            self.assertEqual([n for n, _ in merged.learned], ["작년보고.txt"])
+            self.assertEqual(other.stats()["docs"], 2)
+            self.assertEqual(other.import_package(Path(d) / "a.gkb").duplicates, ["작년보고.txt"])
+
+            doc_id = next(i for i, name, *_ in other.documents() if name == "작년보고.txt")
+            other.forget(doc_id)
+            self.assertEqual(other.search("감사 준비"), [])
+            kb.close()
+            other.close()
+
+    def test_readers(self):
+        from gongmun_ai.readers import UnsupportedFile, read_document
+        with tempfile.TemporaryDirectory() as d:
+            docx = Path(d) / "a.docx"
+            w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xml = (f'<w:document xmlns:w="{w}"><w:body><w:p><w:r><w:t>개요</w:t></w:r></w:p>'
+                   "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>구분</w:t></w:r></w:p></w:tc>"
+                   "<w:tc><w:p><w:r><w:t>내용</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>")
+            with zipfile.ZipFile(docx, "w") as z:
+                z.writestr("word/document.xml", xml)
+            self.assertEqual(read_document(docx), "개요\n구분 | 내용")
+            with self.assertRaises(UnsupportedFile):
+                read_document(Path(d) / "a.xyz")
+
+
+class ReportDraftTest(unittest.TestCase):
+    def test_draft_report_uses_knowledge(self):
+        from gongmun_ai.learning import KnowledgeBase
+        answer = {"title": "2026년 교육 계획", "summary": ["교육 계획 보고임."],
+                  "sections": [{"title": "개요", "subs": [{
+                      "heading": "목적", "paragraphs": ["직무 역량을 향상시키고자 함"], "bullets": [], "notes": [],
+                      "table": {"title": "", "columns": ["구분", "인원"], "rows": [["간부", "30명"]]}}]}]}
+        with tempfile.TemporaryDirectory() as d:
+            kb = KnowledgeBase(Path(d) / "k.db")
+            kb.learn_texts([("작년.txt", LearningTest.REPORT)])
+            backend = ScriptedBackend(json.dumps(answer, ensure_ascii=False))
+            rep, result = writer.draft_report(backend, "국정감사 준비 교육 보고서 (대상 30명)", kb=kb)
+            kb.close()
+        system, user = backend.calls[0][0]["content"], backend.calls[0][1]["content"]
+        self.assertIn("추진 배경", system)          # 배운 소제목
+        self.assertIn("학습한 문서: 작년.txt", user)  # 찾은 관련 문단
+        self.assertEqual(rep.sections[0].subs[0].paragraphs, ["직무 역량을 향상하고자 함"])  # 교정 반영
+        self.assertIn("Ⅰ. 개요", result.text)
+        self.assertFalse(any("30" in w for w in result.warnings))
 
 
 class CliTest(unittest.TestCase):

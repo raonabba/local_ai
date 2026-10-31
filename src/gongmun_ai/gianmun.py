@@ -65,9 +65,8 @@ class Gianmun:
         walk(self.items)
         return "\n".join(out)
 
-    def render(self) -> str:
-        lines = [f"수신  {self.recipient}", "(경유)", f"제목  {self.title}", ""]
-
+    def body_lines(self) -> list[tuple[int, str, str]]:
+        """본문 항목을 (단계, 항목 기호, 글) 목록으로. 항목이 하나뿐이면 기호를 비운다."""
         body: list[Item] = []
         related = sorted(self.related, key=_date_key)  # 날짜가 앞선 근거부터
         if len(related) == 1:
@@ -75,25 +74,30 @@ class Gianmun:
         elif related:
             body.append(Item("관련", [Item(r) for r in related]))
         body += self.items
-
         if len(body) == 1 and not body[0].children:
-            lines.append(body[0].text)  # 항목이 하나뿐이면 번호를 붙이지 않는다
-            body = []
+            return [(0, "", body[0].text)]
 
-        def emit(items, depth):
+        out: list[tuple[int, str, str]] = []
+
+        def walk(items, depth):
             for n, it in enumerate(items, 1):
-                lines.append(" " * (depth * INDENT) + f"{marker(depth, n)} {it.text}")
-                emit(it.children, depth + 1)
-        emit(body, 0)
+                out.append((depth, marker(depth, n), it.text))
+                walk(it.children, depth + 1)
+        walk(body, 0)
+        return out
 
+    def attachment_lines(self) -> list[str]:
+        """붙임 줄(첫 줄은 '붙임  '으로 시작)."""
+        if len(self.attachments) == 1:
+            return [f"붙임  {_attachment_text(self.attachments[0])}"]
+        return [("붙임  " if n == 1 else "      ") + f"{n}. {_attachment_text(a)}"
+                for n, a in enumerate(self.attachments, 1)]
+
+    def render(self) -> str:
+        lines = [f"수신  {self.recipient}", "(경유)", f"제목  {self.title}", ""]
+        lines += [" " * (d * INDENT) + (f"{m} {t}" if m else t) for d, m, t in self.body_lines()]
         if self.attachments:
-            lines.append("")
-            for n, a in enumerate(self.attachments, 1):
-                a = _attachment_text(a)
-                if len(self.attachments) == 1:
-                    lines.append(f"붙임  {a}")
-                else:
-                    lines.append(("붙임  " if n == 1 else "      ") + f"{n}. {a}")
+            lines += ["", *self.attachment_lines()]
         lines[-1] += "  끝."
         return "\n".join(lines)
 
