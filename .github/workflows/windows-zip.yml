@@ -41,7 +41,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: 공문서AI_윈도우
-          path: dist/공문서AI_윈도우.zip
+          path: dist/GongmunAI_windows.zip
 
       - name: 릴리스에 올리기
         env:
@@ -50,6 +50,6 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then tag="build-${GITHUB_RUN_NUMBER}"; fi
-          gh release create "$tag" "dist/공문서AI_윈도우.zip" \
+          gh release create "$tag" "dist/GongmunAI_windows.zip" \
             --target "${GITHUB_SHA}" --title "공문서AI 윈도우 ($tag)" \
             --notes "압축을 풀고 공문서AI.exe를 실행하세요. 설치가 필요 없습니다. AI 모델은 AI모델_받기.bat으로 받습니다."

@@ -16,7 +16,7 @@
 
 ## 설치 없이 쓰기 (윈도우 ZIP)
 
-[Releases](https://github.com/raonabba/local_ai/releases)에서 `공문서AI_윈도우.zip`을 받아 압축을 풀고 `공문서AI.exe`를 실행합니다.
+[Releases](https://github.com/raonabba/local_ai/releases)에서 `GongmunAI_windows.zip`을 받아 압축을 풀고 `공문서AI.exe`를 실행합니다.
 파이썬도 설치할 필요가 없습니다(실행 파일에 파이썬·AI 엔진·HWP 읽기 기능이 들어 있음). 사용법은 압축 안의 `사용설명.txt`를 보세요.
 ZIP은 `.github/workflows/windows-zip.yml`이 윈도우에서 만들고 실행 파일을 자체 점검한 뒤 올립니다.
 

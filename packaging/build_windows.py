@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 APP = DIST / "공문서AI"
-ZIP = DIST / "공문서AI_윈도우.zip"
+ZIP = DIST / "GongmunAI_windows.zip"  # GitHub 릴리스는 첨부 파일 이름의 한글을 지우므로 영문으로
 
 
 def build_exe() -> None:
