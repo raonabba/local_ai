@@ -47,10 +47,30 @@ def self_test() -> int:
         import tkinter
         return f"Tk {tkinter.TkVersion}"
 
+    def real_model():
+        """models 폴더의 실제 모델로 보고서 초안을 써 본다(--ai)."""
+        import time
+        from gongmun_ai import writer
+        from gongmun_ai.layouts import report_hwpx
+        from gongmun_ai.llm import LlamaCppBackend, find_model
+        from gongmun_ai.settings import Settings
+        path = find_model(folder=app_root() / "models")
+        t0 = time.time()
+        backend = LlamaCppBackend(path)
+        t1 = time.time()
+        rep, result = writer.draft_report(backend, "2026년 국정감사 수감 준비 계획 보고서. 대상은 본부 및 소속기관.")
+        t2 = time.time()
+        report_hwpx(rep, Settings()).save(Path(tempfile.mkdtemp()) / "ai.hwpx")
+        lines.append("----- AI 초안 -----\n" + result.text + "\n----- 주의 -----\n" + "\n".join(result.warnings))
+        return (f"{path.name} 불러오기 {t1 - t0:.0f}초, 보고서 초안 {t2 - t1:.0f}초, "
+                f"장 {len(rep.sections)}개 · 절 {sum(len(s.subs) for s in rep.sections)}개")
+
     check("한글 문서", hwpx_and_hwp)
     check("지식 DB", knowledge)
     check("AI 엔진", engine)
     check("화면", gui)
+    if "--ai" in sys.argv:
+        check("실제 AI 모델", real_model)
     (app_root() / "selftest.txt").write_text("\n".join(lines), encoding="utf-8")
     return 0 if ok else 1
 

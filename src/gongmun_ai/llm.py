@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Protocol
 
@@ -50,7 +51,11 @@ class LlamaCppBackend:
         except ImportError as e:
             raise RuntimeError(
                 "llama-cpp-python이 설치되지 않았습니다: pip install -e .[llm]") from e
-        self._llm = Llama(model_path=str(model_path), n_ctx=n_ctx,
+        model_path = Path(model_path)
+        with open(model_path, "rb") as f:
+            if f.read(4) != b"GGUF":
+                raise ValueError(f"{model_path.name}: GGUF 모델 파일이 아닙니다(받다가 끊겼거나 다른 파일).")
+        self._llm = Llama(model_path=_engine_path(model_path), n_ctx=n_ctx,
                           n_threads=n_threads or os.cpu_count(),
                           n_gpu_layers=n_gpu_layers, verbose=False)
         # Qwen3는 답하기 전에 길게 '생각'하는데, CPU에서는 몇 분씩 걸리므로 끈다.
@@ -68,6 +73,18 @@ class LlamaCppBackend:
         out = self._llm.create_chat_completion(
             messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
         return clean_output(out["choices"][0]["message"]["content"])
+
+
+def _engine_path(path: Path) -> str:
+    """AI 엔진에 넘길 경로. 윈도우에서 경로에 한글이 있으면 영문 짧은 경로(8.3)로 바꿔
+    엔진이 한글 경로를 못 여는 경우를 피한다. 짧은 경로를 못 얻으면 원래 경로를 쓴다."""
+    s = str(path.resolve())
+    if sys.platform != "win32" or s.isascii():
+        return s
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetShortPathNameW(s, buf, len(buf))
+    return buf.value if 0 < n < len(buf) else s
 
 
 class ScriptedBackend:

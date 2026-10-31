@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       PYTHONUTF8: "1"  # 러너 콘솔(cp1252)에서도 한글 로그가 깨지거나 멈추지 않게
     steps:
@@ -35,7 +35,22 @@ jobs:
           python -m pip install .
           python -m unittest discover -s tests -v
 
-      - name: 실행 파일과 ZIP 만들기
+      - uses: actions/cache@v4
+        with:
+          path: model-cache
+          key: qwen3-4b-q4_k_m
+
+      - name: 시험용 AI 모델 받기 (AI모델_받기.bat과 같은 주소)
+        shell: bash
+        run: |
+          mkdir -p model-cache
+          f=model-cache/Qwen3-4B-Q4_K_M.gguf
+          [ -s "$f" ] || curl -fL --retry 3 -o "$f" https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf
+          ls -l "$f"
+
+      - name: 실행 파일과 ZIP 만들기 (실제 AI 모델로 자체 점검)
+        env:
+          TEST_MODEL: model-cache/Qwen3-4B-Q4_K_M.gguf
         run: python packaging/build_windows.py
 
       - uses: actions/upload-artifact@v4

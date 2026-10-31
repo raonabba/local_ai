@@ -35,6 +35,10 @@ NO_MODEL_MSG = ("AI 모델이 없어 이 기능을 쓸 수 없습니다.\n\n"
                 "models 폴더에 AI 모델 파일(.gguf)을 넣은 뒤 프로그램을 다시 여세요. "
                 "('AI모델_받기.bat'으로 받을 수 있습니다.)\n\n"
                 "교정·학습·결재권자 점검·예시 문서는 AI 없이 지금 바로 쓸 수 있습니다.")
+LOAD_HINTS = ("이렇게 해 보세요.\n"
+              "- 다른 프로그램을 닫아 메모리를 확보한 뒤 다시 누르세요(메모리 8GB 이상 권장).\n"
+              "- 모델 파일 크기가 받기 페이지와 다르면 받다가 끊긴 것이니 다시 받으세요.\n"
+              "- 2013년 이전 CPU(AVX2 미지원)에서는 AI 엔진이 동작하지 않습니다.")
 DOC_TYPES = ("보고서(붙임)", "기안문")
 DOC_FILES = [("한글 문서 (HWPX)", "*.hwpx"), ("한글 97~2022 (HWP)", "*.hwp")]
 LEARN_FILES = [("문서", " ".join(f"*{e}" for e in SUPPORTED)), ("모든 파일", "*.*")]
@@ -55,6 +59,8 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.backend: LlamaCppBackend | None = None
+        self.model_state = "loading"  # loading | ready | none | error
+        self.model_error = ""
         self.busy = False
         self.ai_buttons: list[ttk.Button] = []
         self.settings = Settings.load()
@@ -228,20 +234,49 @@ class App:
     # ------------------------------------------------------------ AI 실행
 
     def _load_model(self) -> None:
+        self.model_state = "loading"
         try:
             path = find_model(folder=MODEL_DIR)
         except FileNotFoundError:
+            self.model_state = "none"
             self._after_status("AI 모델 없음: 교정·학습·결재권자 점검·예시 문서는 바로 쓸 수 있습니다. "
                                "(톤 조정·초안은 models 폴더에 모델을 넣은 뒤 사용)")
             return
-        self._after_status(f"AI 모델 불러오는 중: {path.name} ...")
+        self._after_status(f"AI 모델 불러오는 중: {path.name} ... (처음에는 1분 정도 걸릴 수 있습니다)")
         try:
             backend = LlamaCppBackend(path)
-        except Exception as e:  # 엔진 없음, 메모리 부족 등
+        except Exception as e:  # 엔진 없음, 파일 손상, 메모리 부족 등
+            self.model_error = f"{type(e).__name__}: {e}"
+            self.model_state = "error"
             self._after_status(f"AI 모델을 불러오지 못했습니다: {e}")
             return
         self.backend = backend
+        self.model_state = "ready"
         self._after_status(f"AI 준비 완료: {path.name}  |  외부 통신 차단됨")
+
+    def _reload_model(self) -> None:
+        self.model_state = "loading"
+        threading.Thread(target=self._load_model, daemon=True).start()
+
+    def _ai_ready(self) -> bool:
+        """AI를 쓸 수 있으면 True. 아니면 이유를 알려 주고, 필요하면 모델을 다시 찾는다."""
+        if self.backend is not None:
+            return True
+        if self.model_state == "loading":
+            messagebox.showinfo("AI 기능", "AI 모델을 불러오는 중입니다.\n\n"
+                                "아래 상태 줄에 'AI 준비 완료'가 뜨면 다시 눌러 주세요. "
+                                "(처음에는 1분 정도 걸릴 수 있습니다)")
+        elif self.model_state == "error":
+            messagebox.showerror("AI 기능", f"AI 모델을 불러오지 못했습니다.\n\n{self.model_error}\n\n{LOAD_HINTS}")
+            self._reload_model()  # 메모리 부족처럼 잠깐의 문제일 수 있어 다시 시도한다
+        elif any(MODEL_DIR.glob("*.gguf")):
+            # 프로그램을 켠 뒤에 모델을 넣은 경우: 다시 열지 않아도 되게 지금 불러온다.
+            self._reload_model()
+            messagebox.showinfo("AI 기능", "models 폴더에서 AI 모델을 찾았습니다. 지금 불러오는 중입니다.\n\n"
+                                "아래 상태 줄에 'AI 준비 완료'가 뜨면 다시 눌러 주세요.")
+        else:
+            messagebox.showinfo("AI 기능", NO_MODEL_MSG)
+        return False
 
     def _after_status(self, msg: str) -> None:
         self.root.after(0, self.status.set, msg)
@@ -250,8 +285,7 @@ class App:
         """오래 걸리는 일을 뒤에서 돌리고, 끝나면 on_done(결과)을 화면 쪽에서 부른다."""
         if self.busy:
             return
-        if need_ai and self.backend is None:
-            messagebox.showinfo("AI 기능", NO_MODEL_MSG)
+        if need_ai and not self._ai_ready():
             return
         self.busy = True
         for b in self.ai_buttons:
