@@ -53,8 +53,14 @@ class LlamaCppBackend:
         self._llm = Llama(model_path=str(model_path), n_ctx=n_ctx,
                           n_threads=n_threads or os.cpu_count(),
                           n_gpu_layers=n_gpu_layers, verbose=False)
+        # Qwen3는 답하기 전에 길게 '생각'하는데, CPU에서는 몇 분씩 걸리므로 끈다.
+        self.no_think = "qwen3" in Path(model_path).name.lower()
+        self.name = Path(model_path).name
 
     def chat(self, messages, *, json_schema=None, max_tokens=1024, temperature=0.3):
+        if self.no_think:
+            messages = [*messages[:-1],
+                        {**messages[-1], "content": messages[-1]["content"] + " /no_think"}]
         kwargs = {}
         if json_schema is not None:
             # 문법 제약으로 작은 모델도 형식이 깨지지 않은 JSON을 내게 한다.
@@ -76,15 +82,15 @@ class ScriptedBackend:
         return self.responses.pop(0)
 
 
-def find_model(explicit: str | None = None) -> Path:
-    """--model 인자 > GONGMUN_MODEL 환경변수 > models/ 폴더의 첫 .gguf 순으로 찾는다."""
+def find_model(explicit: str | None = None, folder: str | Path = "models") -> Path:
+    """--model 인자 > GONGMUN_MODEL 환경변수 > 모델 폴더의 첫 .gguf 순으로 찾는다."""
     for cand in (explicit, os.environ.get("GONGMUN_MODEL")):
         if cand:
             p = Path(cand)
             if not p.is_file():
                 raise FileNotFoundError(f"모델 파일이 없습니다: {p}")
             return p
-    found = sorted(Path("models").glob("*.gguf"))
+    found = sorted(Path(folder).glob("*.gguf"))
     if not found:
         raise FileNotFoundError(
             "모델 파일(.gguf)을 찾지 못했습니다. models/ 폴더에 넣거나 --model로 지정하세요.")

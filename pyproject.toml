@@ -16,5 +16,8 @@ llm = ["llama-cpp-python>=0.3"]
 [project.scripts]
 gongmun = "gongmun_ai.cli:main"
 
+[project.gui-scripts]
+gongmun-gui = "gongmun_ai.gui:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

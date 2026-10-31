@@ -239,6 +239,33 @@ class SecurityTest(unittest.TestCase):
             socket.create_connection(("example.com", 80))
 
 
+class GuiTest(unittest.TestCase):
+    def test_proofread_tab(self):
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+        except Exception as e:  # tkinter가 없거나 화면이 없는 환경
+            self.skipTest(f"화면 없음: {e}")
+        from gongmun_ai import gui
+        try:
+            gui.App(root)
+
+            def find(w, cls):
+                for c in w.winfo_children():
+                    yield from ([c] if isinstance(c, cls) else [])
+                    yield from find(c, cls)
+
+            buttons = {b.cget("text"): b for b in find(root, gui.ttk.Button)}
+            buttons["예시 글 넣기"].invoke()
+            buttons["교정하기 (AI 없이 즉시)"].invoke()
+            result = next(find(root, tk.Text))  # 첫 탭의 입력
+            texts = list(find(root, tk.Text))
+            self.assertIn("2025. 3. 4.(화) 14:30~17:00", texts[1].get("1.0", "end"))
+            self.assertTrue(result.tag_ranges("fix"))
+        finally:
+            root.destroy()
+
+
 class CliTest(unittest.TestCase):
     def test_proofread_cp949_file(self):
         from gongmun_ai.cli import main

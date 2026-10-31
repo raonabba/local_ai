@@ -44,22 +44,30 @@ class Result:
 
 # ---------------------------------------------------------------- 사실 보존 검사
 
-_NUM = re.compile(r"\d[\d,]*")
+# 날짜·시각은 통째로 비교해야 '3월 4일'이 '3, 4' 같은 조각으로 흩어지지 않는다.
+_FACT = re.compile(r"\d{4}\. \d{1,2}\. \d{1,2}\.|\d{2}:\d{2}|\d[\d,]*")
 
 
-def _numbers(text: str) -> list[str]:
+def _facts(text: str) -> dict[str, str]:
+    """정규화한 숫자 표현 → 보여 줄 표기."""
     # 표기 규칙 차이(2026년 10월 → 2026. 10.)로 생기는 오탐을 없애려 먼저 정규화한다.
     norm = apply_fixes(text, check(text, official=False))
-    return [n.replace(",", "").lstrip("0") or "0" for n in _NUM.findall(norm)]
+    out = {}
+    for tok in _FACT.findall(norm):
+        tok = tok.rstrip(",")
+        key = tok.replace(",", "").lstrip("0") or "0"
+        out.setdefault(key, tok)
+    return out
 
 
 def fact_warnings(source: str, output: str) -> list[str]:
-    src, out = set(_numbers(source)), set(_numbers(output))
+    src, out = _facts(source), _facts(output)
     warnings = []
-    if missing := sorted(src - out, key=len):
+    # '2026'(연도)이 '2026. 3. 4.' 안에 들어 있으면 빠진 것이 아니다.
+    if missing := [src[k] for k in src if k not in out and not any(o.startswith(k + ".") for o in out)]:
         warnings.append(f"원문의 숫자가 빠졌습니다: {', '.join(missing)}")
-    if added := sorted(out - src, key=len):
-        warnings.append(f"원문에 없던 숫자가 생겼습니다(확인 필요): {', '.join(added)}")
+    if added := [out[k] for k in out if k not in src]:
+        warnings.append(f"원문에 없던 숫자가 생겼습니다(사실인지 확인하세요): {', '.join(added)}")
     return warnings
 
 
