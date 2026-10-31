@@ -111,12 +111,28 @@ def load_cpu_backend() -> str:
     libggml.ggml_backend_dev_count.restype = ctypes.c_size_t
     if libggml.ggml_backend_dev_count() == 0:
         raise RuntimeError("이 PC의 CPU에 맞는 AI 엔진을 찾지 못했습니다.")
-    libggml.ggml_backend_dev_get.restype = ctypes.c_void_p
-    libggml.ggml_backend_dev_get.argtypes = [ctypes.c_size_t]
-    libggml.ggml_backend_dev_description.restype = ctypes.c_char_p
-    libggml.ggml_backend_dev_description.argtypes = [ctypes.c_void_p]
-    _cpu_backend = libggml.ggml_backend_dev_description(libggml.ggml_backend_dev_get(0)).decode("utf-8", "replace")
+    _cpu_backend = _device_name(libggml, lib_dir)
     return _cpu_backend
+
+
+def _device_name(libggml, lib_dir: Path) -> str:
+    """불러온 엔진의 장치 이름(상태 줄 표시용). 못 읽어도 AI 사용에는 지장이 없다."""
+    import ctypes
+    try:
+        libggml.ggml_backend_dev_get.restype = ctypes.c_void_p
+        libggml.ggml_backend_dev_get.argtypes = [ctypes.c_size_t]
+        dev = libggml.ggml_backend_dev_get(0)
+        # 윈도우에서는 이 함수가 ggml.dll이 아니라 ggml-base.dll에 들어 있다.
+        from llama_cpp._ctypes_extensions import load_shared_library
+        for lib in (libggml, load_shared_library("ggml-base", lib_dir)):
+            fn = getattr(lib, "ggml_backend_dev_description", None)
+            if fn is not None:
+                fn.restype = ctypes.c_char_p
+                fn.argtypes = [ctypes.c_void_p]
+                return fn(dev).decode("utf-8", "replace").strip()
+    except (OSError, AttributeError, RuntimeError):
+        pass
+    return "CPU"
 
 
 def total_memory_gb() -> float:
