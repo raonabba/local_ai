@@ -253,6 +253,7 @@ class App:
         except Exception as e:  # 엔진 없음, 파일 손상, 메모리 부족 등
             self.model_error = f"{type(e).__name__}: {e}"
             self.model_state = "error"
+            log_error(f"AI 모델 불러오기 실패: {path}")
             self._after_status(f"AI 모델을 불러오지 못했습니다: {e}")
             return
         self.backend = backend
@@ -593,8 +594,31 @@ class App:
         return tab
 
 
+LOG_PATH = ROOT / "오류기록.txt"
+
+
+def log_error(title: str, exc: BaseException | None = None) -> None:
+    """지금 처리 중인 예외를 오류기록.txt에 남긴다(문의할 때 이 파일을 보내면 된다)."""
+    import platform
+    import traceback
+    from datetime import datetime
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} {title}\n"
+                    f"{platform.platform()} | {platform.processor()} | CPU {os.cpu_count()}개\n"
+                    + ("".join(traceback.format_exception(exc)) if exc else traceback.format_exc()))
+    except OSError:
+        pass
+
+
 def main() -> None:
     block_network()
+    import faulthandler
+    try:
+        # AI 엔진이 CPU 명령어 문제 등으로 프로그램째 멈추는 경우에도 이유를 남긴다.
+        faulthandler.enable(open(LOG_PATH, "a", encoding="utf-8"))
+    except OSError:
+        pass
     if sys.platform == "win32":
         try:  # 고해상도 화면에서 글자가 흐리게 보이지 않게 한다
             import ctypes
@@ -602,6 +626,11 @@ def main() -> None:
         except (AttributeError, OSError):
             pass
     root = tk.Tk()
+
+    def report(exc, val, tb):
+        log_error("화면 처리 중 오류", val)
+        messagebox.showerror("오류", f"{val}\n\n자세한 내용은 '{LOG_PATH.name}'에 남겼습니다.")
+    root.report_callback_exception = report
     App(root)
     root.mainloop()
 
