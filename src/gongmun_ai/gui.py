@@ -78,7 +78,13 @@ class App:
         nb.add(self._profile_tab(nb), text="  결재권자 점검  ")
         ttk.Label(root, textvariable=self.status, anchor="w", padding=(10, 4)).pack(fill="x")
 
+        root.protocol("WM_DELETE_WINDOW", self.close)
         threading.Thread(target=self._load_model, daemon=True).start()
+
+    def close(self) -> None:
+        """창을 닫을 때 지식 DB를 닫는다(윈도우는 열린 파일을 옮기거나 지울 수 없게 잠근다)."""
+        self.kb.close()
+        self.root.destroy()
 
     # ------------------------------------------------------------ 공통 화면 부품
 

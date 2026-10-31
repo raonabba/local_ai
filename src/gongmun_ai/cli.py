@@ -153,6 +153,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     block_network()
+    for stream in (sys.stdout, sys.stderr):
+        # 콘솔이 표현하지 못하는 글자(예: 영문 윈도우의 한글)는 '?'로 바꿔 출력이 멈추지 않게 한다.
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     if getattr(args, "action", None) == "점검" and not args.file:
         print("점검할 문서 파일을 지정하세요.", file=sys.stderr)

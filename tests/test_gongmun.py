@@ -253,7 +253,7 @@ class GuiTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as d:
                 gui.KB_PATH = Path(d) / "k.db"
-                gui.App(root)
+                app = gui.App(root)
 
                 def find(w, cls):
                     for c in w.winfo_children():
@@ -273,7 +273,7 @@ class GuiTest(unittest.TestCase):
 
                 {b.cget("text"): b for b in find(draft, gui.ttk.Button)}["예시 문서 보기 (AI 없이)"].invoke()
                 self.assertIn("국정감사", list(find(draft, tk.Text))[1].get("1.0", "end"))
-                root.destroy()
+                app.close()
         finally:
             gui.KB_PATH = old_kb
 
