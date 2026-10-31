@@ -408,6 +408,15 @@ class ReportModelTest(unittest.TestCase):
         self.assertEqual([x.heading for x in subs], ["단계별 계획", "예산"])
         self.assertEqual(subs[0].paragraphs, ["첫 단계", "둘째 단계"])
 
+    def test_placeholder_notes_removed(self):
+        from gongmun_ai.report import Report
+        rep = Report.from_dict({"title": "t", "summary": [], "sections": [{"title": "개요", "subs": [
+            {"heading": "목표", "paragraphs": [], "bullets": ["a"], "notes": ["※ 참고 사항"], "table": {}},
+            {"heading": "일정", "paragraphs": [], "bullets": ["b"], "notes": ["※ 세부 일정은 따로 알림"], "table": {}}]}]})
+        self.assertEqual(rep.sections[0].subs[0].notes, [])
+        self.assertEqual(rep.sections[0].subs[1].notes, ["세부 일정은 따로 알림"])
+        self.assertNotIn("※ ※", rep.to_text())
+
     def test_drop_trivial_tables(self):
         from gongmun_ai.report import Report
         t1 = {"title": "", "columns": ["시작일", "종료일"], "rows": [["2026. 3. 1.", "2026. 3. 31."]]}

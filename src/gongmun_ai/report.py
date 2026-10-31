@@ -47,6 +47,11 @@ class Report:
         def strs(v) -> list[str]:
             return [str(x).strip() for x in v or [] if str(x).strip()]
 
+        def notes(v) -> list[str]:
+            # '※'는 서식이 붙이므로 떼고, 작은 모델이 자리만 채운 '참고 사항' 같은 빈 말은 뺀다.
+            out = [n.lstrip("※ ").strip() for n in strs(v)]
+            return [n for n in out if n.replace(" ", "") not in ("참고사항", "참고", "비고", "없음", "")]
+
         def table(t) -> Table:
             t = t or {}
             cols = strs(t.get("columns"))
@@ -57,7 +62,7 @@ class Report:
         sections = []
         for s in d.get("sections") or []:
             subs = [Sub(str(x.get("heading", "")).strip(), strs(x.get("paragraphs")), strs(x.get("bullets")),
-                        strs(x.get("notes")), table(x.get("table")))
+                        notes(x.get("notes")), table(x.get("table")))
                     for x in s.get("subs") or []]
             sections.append(Section(str(s.get("title", "")).strip(), subs))
         return cls(str(d.get("title", "")).strip(), strs(d.get("summary")), sections)
