@@ -69,11 +69,16 @@ class Gianmun:
         lines = [f"수신  {self.recipient}", "(경유)", f"제목  {self.title}", ""]
 
         body: list[Item] = []
-        if len(self.related) == 1:
-            body.append(Item(f"관련: {self.related[0]}"))
-        elif self.related:
-            body.append(Item("관련", [Item(r) for r in self.related]))
+        related = sorted(self.related, key=_date_key)  # 날짜가 앞선 근거부터
+        if len(related) == 1:
+            body.append(Item(f"관련: {related[0]}"))
+        elif related:
+            body.append(Item("관련", [Item(r) for r in related]))
         body += self.items
+
+        if len(body) == 1 and not body[0].children:
+            lines.append(body[0].text)  # 항목이 하나뿐이면 번호를 붙이지 않는다
+            body = []
 
         def emit(items, depth):
             for n, it in enumerate(items, 1):
@@ -93,11 +98,21 @@ class Gianmun:
         return "\n".join(lines)
 
 
+_DATE = re.compile(r"(\d{4})\. (\d{1,2})\. (\d{1,2})\.")
+
+
+def _date_key(text: str) -> tuple[int, int, int]:
+    m = _DATE.search(text)
+    return tuple(int(g) for g in m.groups()) if m else (9999, 12, 31)
+
+
 _COPIES = re.compile(r"\d+\s*부\.?$")
 
 
 def _attachment_text(a: str) -> str:
     a = a.rstrip(" .")
+    if a.endswith(")"):  # '규정 1부 (따로 보냄)' 같은 표기는 그대로 둔다
+        return a
     if not _COPIES.search(a):
         a += " 1부"
     return a + "."

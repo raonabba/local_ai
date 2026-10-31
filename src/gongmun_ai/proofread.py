@@ -1,8 +1,8 @@
 """공문서 규칙 기반 교정.
 
 LLM 없이 즉시 동작하므로 저사양 PC에서도 바로 쓸 수 있다.
-근거: 행정업무의 운영 및 혁신에 관한 규정 시행규칙(날짜·시각·금액 표기, 항목 구분),
-행정업무운영 편람(끝 표시, 항목 들여쓰기).
+근거: 행정업무의 운영 및 혁신에 관한 규정 시행규칙, 행정업무운영 편람,
+「공문서 작성법 길라잡이」(2025. 1. 8.)의 표기·항목·붙임·끝 표시 규칙.
 """
 
 from __future__ import annotations
@@ -58,6 +58,11 @@ def korean_amount(n: int) -> str:
 
 _DATE_KO = re.compile(r"(?<!\d)(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일")
 _DATE_SEP = re.compile(r"(?<![\d.])(\d{4})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})(?![\d])\.?")
+_DATE_SHORT_YEAR = re.compile(r"[’'‘](\d{2})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})(?!\d)\.?")
+_WEEKDAY_AFTER = re.compile(r"\([월화수목금토일]\)\.")
+_RANGE_DAY_ONLY = re.compile(r"(\d{4})\. (\d{1,2})\. (\d{1,2})\.\s*([~∼～-])\s*(\d{1,2})\.(?!\s*\d)")
+_RANGE_UNTIL = re.compile(r"([~∼～][\d. :]*\d\.?)\s?까지")
+DATE_MSG = "날짜는 '2025. 1. 6.'처럼 아라비아 숫자로 쓰고 '일' 다음에도 마침표를 찍습니다."
 
 
 def _valid_date(m: int, d: int) -> bool:
@@ -72,59 +77,107 @@ def _check_dates(text: str):
         end = m.end()
         if end < len(text) and text[end] == ".":
             end += 1  # '31일.' 뒤 마침표를 함께 바꿔 '..'이 되지 않게 한다
-        yield Issue("날짜", "날짜는 '2026. 10. 31.' 형식으로 씁니다.",
-                    m.start(), end, text[m.start():end], f"{y}. {mo}. {d}.")
-    for m in _DATE_SEP.finditer(text):
-        y, mo, d = (int(g) for g in m.groups())
-        if not _valid_date(mo, d):
-            continue
-        canonical = f"{y}. {mo}. {d}."
-        if m.group(0) != canonical:
-            yield Issue("날짜", "날짜는 '2026. 10. 31.' 형식으로 씁니다.",
-                        m.start(), m.end(), m.group(0), canonical)
+        yield Issue("날짜", DATE_MSG, m.start(), end, text[m.start():end], f"{y}. {mo}. {d}.")
+    for rx, century in ((_DATE_SEP, 0), (_DATE_SHORT_YEAR, 2000)):
+        for m in rx.finditer(text):
+            y, mo, d = (int(g) for g in m.groups())
+            if not _valid_date(mo, d):
+                continue
+            canonical, end = f"{y + century}. {mo}. {d}.", m.end()
+            # '2025. 1. 6(월).' → '2025. 1. 6.(월)'
+            wd = _WEEKDAY_AFTER.match(text, end)
+            if wd and not m.group(0).endswith("."):
+                canonical += wd.group(0)[:-1]
+                end = wd.end()
+            if text[m.start():end] != canonical:
+                yield Issue("날짜", DATE_MSG, m.start(), end, text[m.start():end], canonical)
+    for m in _RANGE_DAY_ONLY.finditer(text):
+        fixed = f"{m.group(1)}. {m.group(2)}. {m.group(3)}.{m.group(4)}{m.group(2)}. {int(m.group(5))}."
+        yield Issue("기간", "기간 끝 날짜에도 월을 씁니다(2025. 2. 20.~2. 24.).",
+                    m.start(), m.end(), m.group(0), fixed)
+    for m in _RANGE_UNTIL.finditer(text):
+        yield Issue("기간", "물결표(~)가 '까지'의 뜻을 담으므로 '까지'를 함께 쓰지 않습니다.",
+                    m.start(), m.end(), m.group(0), m.group(1))
 
 
-_TIME_AMPM = re.compile(r"(오전|오후)\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?")
+# 시각 표기: 24시각제, 십 미만은 0을 넣고, 시와 분은 쌍점으로 붙여 쓴다.
+# 분 없이 시만 쓸 때는 '09시', '14시'처럼 숫자 다음에 '시'를 쓴다.
+_TIME_AMPM = re.compile(r"(오전|오후|낮|밤)\s*(\d{1,2})\s*(?:시(?:\s*(\d{1,2})\s*분)?|:(\d{2}))")
 _TIME_HM = re.compile(r"(?<!\d)(\d{1,2})\s*시\s*(\d{1,2})\s*분")
-_TIME_H = re.compile(r"(?<!\d)(\d{1,2})\s*시(?![간대작점])")
+_TIME_H = re.compile(r"(?<![\d:])(\d{1,2})\s*시(?![간대작점])")
+_TIME_CLOCK = re.compile(r"(?<![\d:])(\d{1,2})\s*:\s*(\d{2})(?![\d:])(시(?!간)|분)?")
+TIME_MSG = "시각은 24시각제로 '14:30'처럼 씁니다."
+AMBIGUOUS_MSG = "오전/오후가 분명하지 않습니다. 24시각제로 써 주세요(예: 15:30, 09시)."
+
+
+def _to_24h(period: str, h: int) -> int | None:
+    if h > 12:
+        return h if period in ("오후", "낮", "밤") and h <= 23 else None  # '오후 16시' 같은 겹친 표기
+    if period == "오전":
+        return 0 if h == 12 else h
+    if period == "낮":
+        return 12 if h == 12 else (h + 12 if h <= 6 else None)
+    if period == "밤":
+        return None if h == 12 else (h + 12 if h >= 6 else None)
+    return 12 if h == 12 else h + 12  # 오후
 
 
 def _check_times(text: str):
-    msg = "시각은 24시각제로 '14:30'처럼 씁니다."
     taken: list[tuple[int, int]] = []  # 앞 규칙이 이미 처리한 구간
-    for m in _TIME_AMPM.finditer(text):
+
+    def free(m) -> bool:
+        if any(s <= m.start() < e for s, e in taken):
+            return False
         taken.append(m.span())
-        h, mi = int(m.group(2)), int(m.group(3) or 0)
-        if not (1 <= h <= 12 and mi < 60):
+        return True
+
+    for m in _TIME_AMPM.finditer(text):
+        free(m)
+        h, mi = int(m.group(2)), int(m.group(3) or m.group(4) or 0)
+        h24 = _to_24h(m.group(1), h) if mi < 60 else None
+        if h24 is None:
+            yield Issue("시각", "시각이 모호합니다. 마감이라면 '2025. 2. 21. 18:00'처럼 분명하게 씁니다.",
+                        m.start(), m.end(), m.group(0))
+        else:
+            yield Issue("시각", TIME_MSG, m.start(), m.end(), m.group(0), f"{h24:02d}:{mi:02d}")
+    for m in _TIME_HM.finditer(text):
+        if not free(m):
             continue
-        if m.group(1) == "오후" and h != 12:
-            h += 12
-        elif m.group(1) == "오전" and h == 12:
-            h = 0
-        yield Issue("시각", msg, m.start(), m.end(), m.group(0), f"{h:02d}:{mi:02d}")
-    for rx in (_TIME_HM, _TIME_H):
-        for m in rx.finditer(text):
-            if any(s <= m.start() < e for s, e in taken):
-                continue
-            taken.append(m.span())
-            h = int(m.group(1))
-            mi = int(m.group(2)) if rx is _TIME_HM else 0
-            if h > 24 or mi >= 60:
-                continue
-            if 13 <= h <= 24 or h == 0:
-                yield Issue("시각", msg, m.start(), m.end(), m.group(0), f"{h % 24:02d}:{mi:02d}")
-            else:
-                yield Issue("시각", "오전/오후가 분명하지 않습니다. 24시각제로 써 주세요(예: 15:30).",
-                            m.start(), m.end(), m.group(0))
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 13 <= h <= 23 or h == 0:
+            yield Issue("시각", TIME_MSG, m.start(), m.end(), m.group(0), f"{h:02d}:{mi:02d}")
+        elif h <= 12:
+            yield Issue("시각", AMBIGUOUS_MSG, m.start(), m.end(), m.group(0))
+    for m in _TIME_CLOCK.finditer(text):
+        if not free(m):
+            continue
+        h, mi = int(m.group(1)), int(m.group(2))
+        if h <= 24 and mi < 60:
+            canonical = f"{h:02d}:{mi:02d}"
+            if m.group(0) != canonical:
+                yield Issue("시각", "시각은 '09:30'처럼 0을 넣고 쌍점 양쪽을 붙여 씁니다.",
+                            m.start(), m.end(), m.group(0), canonical)
+    for m in _TIME_H.finditer(text):
+        if not free(m):
+            continue
+        h = int(m.group(1))
+        if h == 24:
+            yield Issue("시각", "'24시'는 다음 날과 헷갈립니다. 마감은 '18:00'처럼 분명하게 씁니다.",
+                        m.start(), m.end(), m.group(0))
+        elif 1 <= h <= 12:
+            yield Issue("시각", AMBIGUOUS_MSG, m.start(), m.end(), m.group(0))
 
 
-_AMOUNT = re.compile(r"(?<![\d,])(금\s*)?(\d{1,3}(?:,\d{3})+|\d{4,})\s?원(?![인장칙본형래리활점료])(?!\s*\()")
+# '일금-원정'은 계약서 표기라 그대로 둔다.
+_AMOUNT = re.compile(r"(?<![\d,])(금\s*)?(\d{1,3}(?:,\d{3})+|\d{4,})\s?원(?![인장칙본형래리활점료정])(?![ \t]*\()")
 
 
 def _check_amounts(text: str):
     for m in _AMOUNT.finditer(text):
+        if m.group(1) and m.start() > 0 and text[m.start() - 1] == "일":
+            continue
         n = int(m.group(2).replace(",", ""))
-        yield Issue("금액", "금액은 숫자 뒤 괄호 안에 한글로 함께 씁니다.",
+        yield Issue("금액", "금액은 '금113,560원(금일십일만삼천오백육십원)'처럼 숫자 뒤 괄호에 한글로 함께 씁니다.",
                     m.start(), m.end(), m.group(0), f"금{n:,}원(금{korean_amount(n)}원)")
 
 
@@ -134,9 +187,10 @@ def _check_easy_words(text: str):
     for pattern, repl, reason in EASY_WORDS:
         for m in re.finditer(pattern, text):
             if repl is None:
-                yield Issue("쉬운 말", f"'{m.group(0)}': {reason}", m.start(), m.end(), m.group(0))
+                yield Issue("표현", f"'{m.group(0)}': {reason}", m.start(), m.end(), m.group(0))
             else:
-                yield Issue(reason, f"'{m.group(0)}' → '{repl}'", m.start(), m.end(), m.group(0), repl)
+                new = m.expand(repl)
+                yield Issue(reason, f"'{m.group(0)}' → '{new}'", m.start(), m.end(), m.group(0), new)
 
 
 def _has_rieul_final(ch: str) -> bool:
@@ -173,7 +227,9 @@ def _check_long_sentences(text: str):
 # ---------------------------------------------------------------- 공문서 서식
 
 HANGUL_SEQ = "가나다라마바사아자차카타파하"
-CIRCLED_NUM = "".join(chr(c) for c in range(0x2460, 0x2474))   # ①~⑳
+PAREN_NUM = "".join(chr(c) for c in range(0x2474, 0x2488))       # ⑴~⒇
+PAREN_HANGUL = "".join(chr(c) for c in range(0x320E, 0x321C))    # ㈎~㈛
+CIRCLED_NUM = "".join(chr(c) for c in range(0x2460, 0x2474))     # ①~⑳
 CIRCLED_HANGUL = "".join(chr(c) for c in range(0x326E, 0x327C))  # ㉮~㉻
 
 # (정규식, 번호 문자열, 표시 형식) — 순서가 곧 항목의 단계다.
@@ -182,13 +238,20 @@ _LEVELS = [
     (re.compile(rf"([{HANGUL_SEQ}])\.(?=\s)"), HANGUL_SEQ, "{}."),
     (re.compile(r"(\d{1,2})\)(?=\s)"), None, "{})"),
     (re.compile(rf"([{HANGUL_SEQ}])\)(?=\s)"), HANGUL_SEQ, "{})"),
-    (re.compile(r"\((\d{1,2})\)(?=\s)"), None, "({})"),
-    (re.compile(rf"\(([{HANGUL_SEQ}])\)(?=\s)"), HANGUL_SEQ, "({})"),
+    (re.compile(rf"([{PAREN_NUM}])"), PAREN_NUM, "{}"),
+    (re.compile(rf"([{PAREN_HANGUL}])"), PAREN_HANGUL, "{}"),
     (re.compile(rf"([{CIRCLED_NUM}])"), CIRCLED_NUM, "{}"),
     (re.compile(rf"([{CIRCLED_HANGUL}])"), CIRCLED_HANGUL, "{}"),
 ]
-LEVEL_ORDER = "1. → 가. → 1) → 가) → (1) → (가) → ① → ㉮"
-INDENT = 2
+# 다섯째·여섯째 항목을 자판으로 친 '(1)', '(가)'는 '⑴', '㈎'로 바꾼다.
+_TYPED_PAREN = [
+    (4, re.compile(r"\((\d{1,2})\)(?=\s)"), None),
+    (5, re.compile(rf"\(([{HANGUL_SEQ}])\)(?=\s)"), HANGUL_SEQ),
+]
+# 대등하게 늘어놓을 때는 첫째~넷째 항목 기호 대신 특수 부호를 써도 된다.
+_SYMBOLS = {"□": 0, "○": 1, "-": 2, "•": 3, "∙": 3, "·": 3}
+LEVEL_ORDER = "1. → 가. → 1) → 가) → ⑴ → ㈎ → ① → ㉮ (특수 부호: □ → ○ → - → •)"
+INDENT = 2  # 하위 항목은 2타(한글 1자)씩 오른쪽에서 시작
 
 
 def marker(level: int, index: int) -> str:
@@ -198,15 +261,19 @@ def marker(level: int, index: int) -> str:
 
 
 def _parse_item(line: str):
-    """항목 줄이면 (단계, 순번, 들여쓰기 길이, 기호 길이)."""
+    """항목 줄이면 (단계, 순번 또는 None(특수 부호), 들여쓰기 길이, 기호 길이, 표준 기호 여부)."""
     stripped = line.lstrip(" \t")
     ws = len(line) - len(stripped)
+    if stripped[:1] in _SYMBOLS and stripped[1:2] == " ":
+        return _SYMBOLS[stripped[0]], None, ws, 1, True
     for level, (rx, seq, _) in enumerate(_LEVELS):
-        m = rx.match(stripped)
-        if m:
+        if m := rx.match(stripped):
             tok = m.group(1)
-            idx = int(tok) if seq is None else seq.index(tok) + 1
-            return level, idx, ws, m.end()
+            return level, int(tok) if seq is None else seq.index(tok) + 1, ws, m.end(), True
+    for level, rx, seq in _TYPED_PAREN:
+        if m := rx.match(stripped):
+            tok = m.group(1)
+            return level, int(tok) if seq is None else seq.index(tok) + 1, ws, m.end(), False
     return None
 
 
@@ -222,26 +289,43 @@ def _check_items(text: str):
         parsed = _parse_item(line)
         if parsed is None:
             continue
-        level, idx, ws, mlen = parsed
+        level, idx, ws, mlen, standard = parsed
         tok_start = line_start + ws
+        token = line[ws:ws + mlen]
         if level > prev_level + 1:
-            yield Issue("항목 순서", f"상위 항목 없이 '{line[ws:ws + mlen]}'을(를) 썼습니다. 순서: {LEVEL_ORDER}",
-                        tok_start, tok_start + mlen, line[ws:ws + mlen])
+            yield Issue("항목 순서", f"상위 항목 없이 '{token}'을(를) 썼습니다. 순서: {LEVEL_ORDER}",
+                        tok_start, tok_start + mlen, token)
         else:
-            expected = counters.get(level, 0) + 1
-            if idx != expected and expected <= (20 if _LEVELS[level][1] is None else len(_LEVELS[level][1])):
-                want = marker(level, expected)
-                yield Issue("항목 번호", f"번호가 이어지지 않습니다. '{want}'이(가) 와야 합니다.",
-                            tok_start, tok_start + mlen, line[ws:ws + mlen], want)
-                idx = expected
+            if idx is not None:
+                expected = counters.get(level, 0) + 1
+                seq = _LEVELS[level][1]
+                if expected <= (99 if seq is None else len(seq)):
+                    want = marker(level, expected)
+                    if idx != expected:
+                        yield Issue("항목 번호", f"번호가 이어지지 않습니다. '{want}'이(가) 와야 합니다.",
+                                    tok_start, tok_start + mlen, token, want)
+                    elif not standard:
+                        yield Issue("항목 기호", f"이 단계 항목 기호는 '{want}'입니다. 순서: {LEVEL_ORDER}",
+                                    tok_start, tok_start + mlen, token, want)
+                    idx = expected
             want_ws = level * INDENT
             if ws != want_ws:
                 yield Issue("들여쓰기", f"이 단계 항목은 {want_ws}칸 들여 씁니다.",
                             line_start, line_start + ws, line[:ws], " " * want_ws)
-        counters[level] = idx
+        if idx is not None:
+            counters[level] = idx
         for deeper in [k for k in counters if k > level]:
             del counters[deeper]
         prev_level = level
+
+
+_DOC_REF = re.compile(r"[가-힣A-Za-z]+-\d+\s*\(\d{4}\. \d{1,2}\. \d{1,2}\.\)(?!\s*[「｢『<〈])")
+
+
+def _check_related(text: str):
+    for m in _DOC_REF.finditer(text):
+        yield Issue("관련 근거", "관련 문서는 번호 뒤에 「문서 명칭」을 함께 씁니다.",
+                    m.start(), m.end(), m.group(0))
 
 
 _END_MARK = re.compile(r"([ \t]*\n?[ \t]*)끝\.\s*$")
@@ -272,7 +356,7 @@ def check(text: str, official: bool = True) -> list[Issue]:
     checks = [_check_dates, _check_times, _check_amounts, _check_easy_words,
               _check_spacing, _check_long_sentences]
     if official:
-        checks += [_check_items, _check_end_mark]
+        checks += [_check_items, _check_related, _check_end_mark]
     issues = [i for c in checks for i in c(text)]
     issues.sort(key=lambda i: (i.start, -(i.end - i.start)))
 
@@ -300,7 +384,14 @@ def apply_fixes(text: str, issues: list[Issue]) -> str:
 
 
 def autofix(text: str, official: bool = True) -> tuple[str, list[Issue]]:
-    """자동 수정한 글과, 사람이 판단해야 할 남은 안내 항목."""
-    issues = check(text, official)
-    fixed = apply_fixes(text, issues)
-    return fixed, [i for i in check(fixed, official) if not i.fixable]
+    """자동 수정한 글과, 사람이 판단해야 할 남은 안내 항목.
+
+    한 번 고친 결과에서 새로 드러나는 항목(예: 날짜를 고친 뒤의 기간 표기)도
+    고치도록 몇 차례 반복한다.
+    """
+    for _ in range(3):
+        issues = check(text, official)
+        if not any(i.fixable for i in issues):
+            break
+        text = apply_fixes(text, issues)
+    return text, [i for i in check(text, official) if not i.fixable]

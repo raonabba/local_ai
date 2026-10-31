@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from .gianmun import SCHEMA, Gianmun
+from .knowledge import prompt_guide
 from .llm import Backend, clean_output, parse_json
 from .profiles import Profile
 from .proofread import Issue, apply_fixes, autofix, check
@@ -17,8 +18,8 @@ from .proofread import Issue, apply_fixes, autofix, check
 SYSTEM = (
     "당신은 대한민국 공공기관의 행정 문서 작성을 돕는 보조자입니다.\n"
     "- 원문에 없는 사실, 숫자, 날짜, 기관명을 지어내지 않습니다.\n"
-    "- 공문서 표기 규칙을 지킵니다: 날짜 '2026. 10. 31.', 시각 '14:30', "
-    "금액 '금1,000원(금일천원)'.\n"
+    "- 공문서 표기 규칙을 지킵니다: 날짜 '2025. 1. 6.', 시각 '09:00', '14:30', "
+    "금액 '금13,500원(금일만삼천오백원)'.\n"
     "- 어려운 한자어 대신 쉬운 우리말을 쓰고, 한 문장에는 한 가지 내용만 씁니다."
 )
 
@@ -27,6 +28,8 @@ TONES: dict[str, str] = {
     "대외공문": "다른 기관에 보내는 정중한 문체로 바꾼다. '~합니다', '~하여 주시기 바랍니다'를 쓴다.",
     "쉬운말": "민원인이 한 번에 이해하도록 쉬운 우리말로 바꾼다. 문장을 짧게 나누고 전문 용어는 풀어 쓴다.",
     "간결": "뜻은 그대로 두고 분량을 절반 이하로 줄인다. 꾸밈말과 중복 표현을 없앤다.",
+    "안내문": "국민·민원인에게 안내하는 글로 바꾼다. 주어를 읽는 사람으로 두고, 명령조 대신 "
+              "'~하실 수 있습니다', '~해 주시기 바랍니다'처럼 부드럽고 긍정적으로 쓴다.",
 }
 
 MAX_REFERENCE_CHARS = 2500  # 저사양 PC의 짧은 문맥 길이에 맞춘 참고자료 총량
@@ -62,8 +65,11 @@ def fact_warnings(source: str, output: str) -> list[str]:
 
 # ---------------------------------------------------------------- 작업
 
-def _messages(user: str, profile: Profile | None) -> list[dict]:
-    system = SYSTEM + (f"\n\n{profile.to_prompt()}" if profile else "")
+def _messages(user: str, profile: Profile | None,
+              guide: tuple[str, ...] = ("principles",)) -> list[dict]:
+    system = SYSTEM + "\n\n" + prompt_guide(guide)
+    if profile:
+        system += f"\n\n{profile.to_prompt()}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -111,16 +117,17 @@ def draft(backend: Backend, request: str, profile: Profile | None = None,
     prompt = (
         f"다음 요청에 맞는 기안문 내용을 JSON으로 작성하세요.\n[요청]\n{request}{ref_block}\n\n"
         "작성 방법:\n"
-        "- title: 무엇을 하려는지 드러나는 짧은 제목\n"
+        "- title: 한 가지 안건만 담고 본문 전체를 포괄하는 짧은 제목\n"
         "- recipient: 수신자(내부 보고면 '내부결재')\n"
-        "- related: 관련 근거 문서(참고 문서에 있는 것만, 없으면 빈 목록)\n"
+        "- related: 관련 근거 문서. '부서-번호(날짜)「문서 명칭」' 형식(참고 문서에 있는 것만, 없으면 빈 목록)\n"
         "- items: 본문 항목. text는 한 문장, sub는 세부 내용 목록\n"
         "- attachments: 붙임 파일 이름(없으면 빈 목록)\n"
         f"- 문체: {TONES.get(tone, TONES['보고서'])}\n"
         "- 항목 번호(1., 가.)와 '끝.'은 쓰지 마세요. 서식은 프로그램이 붙입니다.\n"
         "- 참고 문서에 없는 숫자는 쓰지 말고 '○○'으로 비워 두세요."
     )
-    out = backend.chat(_messages(prompt, profile), json_schema=SCHEMA,
+    out = backend.chat(_messages(prompt, profile, ("principles", "structure", "words")),
+                       json_schema=SCHEMA,
                        max_tokens=1500, temperature=0.4)
     doc = Gianmun.from_dict(parse_json(out))
     doc.map_text(lambda t: autofix(t, official=False)[0])

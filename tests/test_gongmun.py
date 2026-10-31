@@ -31,7 +31,14 @@ class ProofreadTest(unittest.TestCase):
         self.assertEqual(fixed("오후 2시 30분 시작"), "14:30 시작")
         self.assertEqual(fixed("오전 9시 시작"), "09:00 시작")
         self.assertEqual(fixed("오전 12시"), "00:00")
-        self.assertEqual(fixed("14시 시작, 3시간 소요"), "14:00 시작, 3시간 소요")
+        self.assertEqual(fixed("14시 시작, 3시간 소요"), "14시 시작, 3시간 소요")
+        self.assertEqual(fixed("오후 16시"), "16:00")
+        self.assertEqual(fixed("9:30-12:20"), "09:30-12:20")
+        self.assertEqual(fixed("13 : 20"), "13:20")
+        self.assertEqual(fixed("09:00시"), "09:00")
+        self.assertEqual(fixed("오전 10:20"), "10:20")
+        self.assertFalse(proofread.check("밤 12시까지", False)[0].fixable)
+        self.assertFalse(proofread.check("2025. 2. 21. 24시까지", False)[-1].fixable)
         hints = [i for i in proofread.check("3시 30분 시작", False) if i.rule == "시각"]
         self.assertEqual(len(hints), 1)
         self.assertFalse(hints[0].fixable)
@@ -54,6 +61,46 @@ class ProofreadTest(unittest.TestCase):
         self.assertEqual(fixed("결정되어지는 사항"), "결정되는 사항")
         self.assertEqual(fixed("하기 위해"), "하기 위해")
 
+    def test_guide_dates(self):
+        self.assertEqual(fixed("’24. 1. 6."), "2024. 1. 6.")
+        self.assertEqual(fixed("날짜: 2025. 1. 6(월)."), "날짜: 2025. 1. 6.(월)")
+        self.assertEqual(fixed("2025. 2. 20.~24."), "2025. 2. 20.~2. 24.")
+        self.assertEqual(fixed("2025. 2. 20.~2. 24.까지"), "2025. 2. 20.~2. 24.")
+        self.assertEqual(fixed("2025.2.20~2025.2.24 까지"), "2025. 2. 20.~2025. 2. 24.")
+
+    def test_guide_amounts(self):
+        self.assertEqual(fixed("금 113,560원"), "금113,560원(금일십일만삼천오백육십원)")
+        self.assertEqual(fixed("예산: 500,000원\n(1) 다음"), "예산: 금500,000원(금오십만원)\n(1) 다음")
+        contract = "일금12,300원정(일금일만이천삼백원정)"
+        self.assertEqual(fixed(contract), contract)
+
+    def test_guide_expressions(self):
+        cases = {
+            "회의를 개최하오니 참석 바랍니다": "회의를 개최하니 참석 바랍니다",
+            "2월달 일정": "2월 일정",
+            "매 2년마다 점검": "2년마다 점검",
+            "역량을 향상시키고": "역량을 향상하고",
+            "R&D 지원, 연구 개발(R&D) 확대": "연구 개발(R&D) 지원, 연구 개발(R&D) 확대",
+            "1F 회의실": "1층 회의실",
+            "건축법시행규칙": "건축법 시행규칙",
+            "1년이상 근무": "1년 이상 근무",
+            "장소 : 대회의실": "장소: 대회의실",
+            "2025. 2. 28.자로 승진": "2025. 2. 28. 자로 승진",
+            "별도 송부": "따로 보냄",
+            "3. 1절 기념": "삼일절 기념",
+            "불우 이웃 돕기": "이웃 돕기",
+            "입금 요망바랍니다": "입금 바랍니다",
+            "스크린도어 설치": "안전문 설치",
+        }
+        for src, want in cases.items():
+            self.assertEqual(fixed(src), want, src)
+
+    def test_guide_hints(self):
+        for text in ("들어가지 마시오.", "관계자 외 출입 엄금", "여권을 교부합니다",
+                     "이력서, 자기소개서 각1부."):
+            issues = proofread.check(text, False)
+            self.assertTrue(issues and not issues[0].fixable, text)
+
     def test_long_sentence_hint(self):
         hints = proofread.check("가" * 120 + ".", False)
         self.assertTrue(any(i.rule == "긴 문장" for i in hints))
@@ -62,6 +109,19 @@ class ProofreadTest(unittest.TestCase):
         text = "1. 첫째\n 가. 하위\n  다. 둘째 하위\n2. 둘째\n2. 셋째"
         self.assertEqual(fixed(text, official=True),
                          "1. 첫째\n  가. 하위\n  나. 둘째 하위\n2. 둘째\n3. 셋째  끝.")
+
+    def test_guide_item_symbols(self):
+        text = "1. 가\n  가. 나\n    1) 다\n      가) 라\n        (1) 마\n          (가) 바  끝."
+        self.assertEqual(fixed(text, official=True),
+                         "1. 가\n  가. 나\n    1) 다\n      가) 라\n        ⑴ 마\n          ㈎ 바  끝.")
+        symbols = "□ 개요\n  ○ 목적\n    - 세부  끝."
+        self.assertEqual([i for i in proofread.check(symbols) if i.fixable], [])
+
+    def test_related_needs_title(self):
+        issues = proofread.check("1. 관련: 재난대응과-12(2025. 2. 1.)\n2. 내용  끝.")
+        self.assertTrue(any(i.rule == "관련 근거" for i in issues))
+        ok = "1. 관련: 재난대응과-12(2025. 2. 1.)「산불 대응 지침」\n2. 내용  끝."
+        self.assertFalse(any(i.rule == "관련 근거" for i in proofread.check(ok)))
 
     def test_skipped_level(self):
         issues = proofread.check("1. 첫째\n    1) 바로 셋째 단계  끝.")
@@ -86,7 +146,15 @@ class GianmunTest(unittest.TestCase):
 
     def test_single_attachment_and_none(self):
         self.assertTrue(Gianmun("제목", attachments=["계획서"]).render().endswith("붙임  계획서 1부.  끝."))
-        self.assertTrue(Gianmun("제목", items=[Item("내용")]).render().endswith("1. 내용  끝."))
+        # 항목이 하나뿐이면 번호를 붙이지 않는다.
+        self.assertTrue(Gianmun("제목", items=[Item("내용")]).render().endswith("\n내용  끝."))
+        self.assertTrue(Gianmun("제목", attachments=["규정 1부. (따로 보냄)"]).render()
+                        .endswith("붙임  규정 1부. (따로 보냄)  끝."))
+
+    def test_related_sorted_by_date(self):
+        doc = Gianmun("제목", related=["B-2(2025. 3. 1.)「나」", "A-1(2025. 2. 1.)「가」"],
+                      items=[Item("내용")])
+        self.assertIn("  가. A-1(2025. 2. 1.)「가」\n  나. B-2(2025. 3. 1.)「나」", doc.render())
 
 
 class ProfileTest(unittest.TestCase):
@@ -137,6 +205,19 @@ class WriterTest(unittest.TestCase):
     def test_unknown_tone(self):
         with self.assertRaises(ValueError):
             writer.adjust_tone(ScriptedBackend(""), "글", "없는톤")
+
+
+class KnowledgeTest(unittest.TestCase):
+    def test_guide_in_prompts(self):
+        backend = ScriptedBackend("결과", json.dumps({"title": "t", "recipient": "내부결재", "related": [],
+                                                      "items": [], "attachments": []}))
+        writer.adjust_tone(backend, "글", "안내문")
+        writer.draft(backend, "요청")
+        tone_system, draft_system = backend.calls[0][0]["content"], backend.calls[1][0]["content"]
+        self.assertIn("비고압성", tone_system)
+        self.assertNotIn("주최", tone_system)  # 짧은 작업에는 필요한 지침만 넣는다
+        self.assertIn("1안건 1기안", draft_system)
+        self.assertIn("주관", draft_system)
 
 
 class LlmTest(unittest.TestCase):
