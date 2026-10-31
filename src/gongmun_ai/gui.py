@@ -67,7 +67,10 @@ class App:
         self.kb = KnowledgeBase(KB_PATH)
 
         root.title("공문서 작성 보조 AI (외부 통신 없음)")
-        root.geometry("1240x800")
+        # 화면보다 크게 열리면 아래쪽(상태 줄)이 잘리므로 화면 크기에 맞춘다.
+        w = min(1240, root.winfo_screenwidth() - 40)
+        h = min(800, root.winfo_screenheight() - 90)
+        root.geometry(f"{w}x{h}+10+10")
         root.minsize(960, 620)
         self.font = self._pick_font()
         style = ttk.Style()
@@ -75,6 +78,9 @@ class App:
         style.configure("TNotebook.Tab", padding=(16, 6))
 
         self.status = tk.StringVar(value="AI 모델 확인 중...")
+        # 상태 줄을 먼저 아래에 붙여야 창이 작아져도 잘리지 않는다(모델 오류 이유가 여기 나온다).
+        ttk.Label(root, textvariable=self.status, anchor="w", padding=(10, 4),
+                  relief="sunken").pack(side="bottom", fill="x")
         nb = ttk.Notebook(root)
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         nb.add(self._draft_tab(nb), text="  초안 작성  ")
@@ -82,7 +88,6 @@ class App:
         nb.add(self._tone_tab(nb), text="  톤 조정  ")
         nb.add(self._learn_tab(nb), text="  학습(지식)  ")
         nb.add(self._profile_tab(nb), text="  결재권자 점검  ")
-        ttk.Label(root, textvariable=self.status, anchor="w", padding=(10, 4)).pack(fill="x")
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         threading.Thread(target=self._load_model, daemon=True).start()
