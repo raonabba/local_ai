@@ -52,19 +52,20 @@ def assemble() -> None:
 
 def self_test() -> None:
     """만든 실행 파일이 실제로 동작하는지 창 없이 점검한다.
-    환경변수 TEST_MODEL에 모델 파일이 있으면 한글 경로의 models 폴더에 잠시 넣고 실제 AI 초안까지 써 본다."""
+    환경변수 TEST_MODELS(';'로 구분)의 모델 파일을 한글 경로의 models 폴더에 잠시 넣고 실제 AI 초안까지 써 본다."""
     args = [str(APP / "공문서AI.exe"), "--self-test"]
-    model = os.environ.get("TEST_MODEL")
-    placed = None
-    if model and Path(model).is_file():
-        placed = APP / "models" / Path(model).name
-        shutil.copy(model, placed)
+    placed = []
+    for model in filter(None, os.environ.get("TEST_MODELS", "").split(";")):
+        if Path(model).is_file():
+            placed.append(APP / "models" / Path(model).name)
+            shutil.copy(model, placed[-1])
+    if placed:
         args.append("--ai")
     try:
-        result = subprocess.run(args, timeout=1800)
+        result = subprocess.run(args, timeout=2400)
     finally:
-        if placed:
-            placed.unlink(missing_ok=True)  # 모델은 ZIP에 넣지 않는다(따로 받음)
+        for p in placed:
+            p.unlink(missing_ok=True)  # 모델은 ZIP에 넣지 않는다(따로 받음)
     report = APP / "selftest.txt"
     text = report.read_text(encoding="utf-8") if report.exists() else "(selftest.txt 없음)"
     print(text)

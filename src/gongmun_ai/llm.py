@@ -55,6 +55,8 @@ class LlamaCppBackend:
         with open(model_path, "rb") as f:
             if f.read(4) != b"GGUF":
                 raise ValueError(f"{model_path.name}: GGUF 모델 파일이 아닙니다(받다가 끊겼거나 다른 파일).")
+        self.cpu = load_cpu_backend()
+        self.progress = None  # 작성 중 글자 수를 알려 받을 함수(화면의 진행 표시용)
         self._llm = Llama(model_path=_engine_path(model_path), n_ctx=n_ctx,
                           n_threads=n_threads or os.cpu_count(),
                           n_gpu_layers=n_gpu_layers, verbose=False)
@@ -70,9 +72,72 @@ class LlamaCppBackend:
         if json_schema is not None:
             # 문법 제약으로 작은 모델도 형식이 깨지지 않은 JSON을 내게 한다.
             kwargs["response_format"] = {"type": "json_object", "schema": json_schema}
-        out = self._llm.create_chat_completion(
-            messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
-        return clean_output(out["choices"][0]["message"]["content"])
+        if self.progress is None:
+            out = self._llm.create_chat_completion(
+                messages=messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
+            return clean_output(out["choices"][0]["message"]["content"])
+        # 저사양 PC에서는 몇 분 걸리므로, 조금씩 받아 가며 진행 상황을 알린다.
+        parts: list[str] = []
+        for chunk in self._llm.create_chat_completion(
+                messages=messages, max_tokens=max_tokens, temperature=temperature, stream=True, **kwargs):
+            piece = chunk["choices"][0]["delta"].get("content")
+            if piece:
+                parts.append(piece)
+                self.progress(sum(len(p) for p in parts))
+        return clean_output("".join(parts))
+
+
+_cpu_backend: str | None = None
+
+
+def load_cpu_backend() -> str:
+    """CPU에 맞는 AI 엔진을 고른다.
+
+    윈도우 묶음은 AI 엔진을 CPU 세대별로 여러 벌 넣어 두고(GGML_CPU_ALL_VARIANTS), 실행할 때
+    이 PC가 지원하는 가장 빠른 것을 불러온다. 그래서 AVX2가 없는 저사양·구형 CPU에서도 동작한다.
+    한 벌만 들어 있는 엔진(일반 설치)이면 아무것도 하지 않는다."""
+    global _cpu_backend
+    if _cpu_backend is not None:
+        return _cpu_backend
+    import ctypes
+    import llama_cpp
+    from llama_cpp._ggml import libggml
+    lib_dir = Path(llama_cpp.__file__).parent / "lib"
+    if not list(lib_dir.glob("*ggml-cpu-*")):
+        _cpu_backend = "기본"
+        return _cpu_backend
+    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+    libggml.ggml_backend_load_all_from_path(str(_engine_path(lib_dir)).encode("utf-8"))
+    libggml.ggml_backend_dev_count.restype = ctypes.c_size_t
+    if libggml.ggml_backend_dev_count() == 0:
+        raise RuntimeError("이 PC의 CPU에 맞는 AI 엔진을 찾지 못했습니다.")
+    libggml.ggml_backend_dev_get.restype = ctypes.c_void_p
+    libggml.ggml_backend_dev_get.argtypes = [ctypes.c_size_t]
+    libggml.ggml_backend_dev_description.restype = ctypes.c_char_p
+    libggml.ggml_backend_dev_description.argtypes = [ctypes.c_void_p]
+    _cpu_backend = libggml.ggml_backend_dev_description(libggml.ggml_backend_dev_get(0)).decode("utf-8", "replace")
+    return _cpu_backend
+
+
+def total_memory_gb() -> float:
+    """이 PC의 메모리(GB). 알 수 없으면 0."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            st = MemoryStatus()
+            st.dwLength = ctypes.sizeof(st)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+            return st.ullTotalPhys / 1024 ** 3
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3
+    except (OSError, ValueError, AttributeError):
+        return 0.0
 
 
 def _engine_path(path: Path) -> str:
@@ -94,9 +159,14 @@ class ScriptedBackend:
         self.responses = list(responses)
         self.calls: list[list[Message]] = []
 
+    progress = None
+
     def chat(self, messages, *, json_schema=None, max_tokens=1024, temperature=0.3):
         self.calls.append(messages)
-        return self.responses.pop(0)
+        out = self.responses.pop(0)
+        if self.progress:
+            self.progress(len(out))
+        return out
 
 
 def find_model(explicit: str | None = None, folder: str | Path = "models") -> Path:
@@ -107,8 +177,14 @@ def find_model(explicit: str | None = None, folder: str | Path = "models") -> Pa
             if not p.is_file():
                 raise FileNotFoundError(f"모델 파일이 없습니다: {p}")
             return p
-    found = sorted(Path(folder).glob("*.gguf"))
+    found = sorted(Path(folder).glob("*.gguf"), key=lambda p: p.stat().st_size)
     if not found:
         raise FileNotFoundError(
             "모델 파일(.gguf)을 찾지 못했습니다. models/ 폴더에 넣거나 --model로 지정하세요.")
-    return found[0]
+    return choose_model(found, total_memory_gb())
+
+
+def choose_model(models: list[Path], memory_gb: float) -> Path:
+    """모델이 여럿이면 메모리에 맞는 것: 8GB 미만이면 가장 작은 것, 아니면 가장 큰 것."""
+    by_size = sorted(models, key=lambda p: p.stat().st_size)
+    return by_size[0] if 0 < memory_gb < 7.5 else by_size[-1]

@@ -62,6 +62,23 @@ class Report:
             sections.append(Section(str(s.get("title", "")).strip(), subs))
         return cls(str(d.get("title", "")).strip(), strs(d.get("summary")), sections)
 
+    def merge_duplicate_headings(self) -> None:
+        """한 장 안에서 같은 소제목이 되풀이되면(작은 모델에서 흔함) 하나로 합친다."""
+        for s in self.sections:
+            merged: dict[str, Sub] = {}
+            for sub in s.subs:
+                key = sub.heading.replace(" ", "")
+                if key in merged:
+                    first = merged[key]
+                    first.paragraphs += sub.paragraphs
+                    first.bullets += sub.bullets
+                    first.notes += sub.notes
+                    if not first.table:
+                        first.table = sub.table
+                else:
+                    merged[key] = sub
+            s.subs = list(merged.values())
+
     def map_text(self, fn) -> None:
         self.title = fn(self.title)
         self.summary = [fn(x) for x in self.summary]

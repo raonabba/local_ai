@@ -378,6 +378,29 @@ class LearningTest(unittest.TestCase):
                 read_document(Path(d) / "a.xyz")
 
 
+class ReportModelTest(unittest.TestCase):
+    def test_merge_duplicate_headings(self):
+        from gongmun_ai.report import Report
+        rep = Report.from_dict({"title": "t", "summary": [], "sections": [{"title": "추진 계획", "subs": [
+            {"heading": "단계별 계획", "paragraphs": ["첫 단계"], "bullets": [], "notes": [], "table": {}},
+            {"heading": "단계별  계획", "paragraphs": ["둘째 단계"], "bullets": ["점검"], "notes": [], "table": {}},
+            {"heading": "예산", "paragraphs": [], "bullets": ["○○원"], "notes": [], "table": {}}]}]})
+        rep.merge_duplicate_headings()
+        subs = rep.sections[0].subs
+        self.assertEqual([x.heading for x in subs], ["단계별 계획", "예산"])
+        self.assertEqual(subs[0].paragraphs, ["첫 단계", "둘째 단계"])
+
+    def test_choose_model_by_memory(self):
+        from gongmun_ai.llm import choose_model
+        with tempfile.TemporaryDirectory() as d:
+            small, big = Path(d) / "a-1.7b.gguf", Path(d) / "b-4b.gguf"
+            small.write_bytes(b"GGUF" + b"0" * 10)
+            big.write_bytes(b"GGUF" + b"0" * 100)
+            self.assertEqual(choose_model([big, small], 4.0), small)
+            self.assertEqual(choose_model([small, big], 16.0), big)
+            self.assertEqual(choose_model([small, big], 0), big)  # 메모리를 모르면 큰 것
+
+
 class ReportDraftTest(unittest.TestCase):
     def test_draft_report_uses_knowledge(self):
         from gongmun_ai.learning import KnowledgeBase

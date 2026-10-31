@@ -258,7 +258,7 @@ class App:
             return
         self.backend = backend
         self.model_state = "ready"
-        self._after_status(f"AI 준비 완료: {path.name}  |  외부 통신 차단됨")
+        self._after_status(f"AI 준비 완료: {path.name}  |  엔진: {backend.cpu}  |  외부 통신 차단됨")
 
     def _reload_model(self) -> None:
         self.model_state = "loading"
@@ -319,8 +319,20 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _run_ai(self, job, on_done) -> None:
-        self._background(lambda: job(self.backend), on_done,
-                         "AI가 작성하는 중입니다... (저사양 PC에서는 1~3분 걸릴 수 있습니다)")
+        import time
+        start = time.monotonic()
+
+        def progress(chars: int) -> None:
+            # 저사양 PC에서는 몇 분 걸리므로 멈춘 것이 아님을 보여 준다.
+            self._after_status(f"AI가 작성하는 중입니다... {chars:,}자 ({time.monotonic() - start:.0f}초)")
+
+        def run():
+            self.backend.progress = progress
+            try:
+                return job(self.backend)
+            finally:
+                self.backend.progress = None
+        self._background(run, on_done, "AI가 작성을 준비하는 중입니다... (저사양 PC에서는 몇 분 걸릴 수 있습니다)")
 
     # ------------------------------------------------------------ 탭: 초안 작성
 

@@ -25,9 +25,10 @@ jobs:
         run: python -m pip install --upgrade pip pyinstaller python-hwpx pypdf
 
       - name: AI 엔진(llama.cpp) 빌드
-        # 업무용 PC에서 돌도록 빌드 PC 전용 명령어(AVX-512 등)를 끄고 AVX2까지만 쓴다.
+        # 공공기관 저사양 PC(AVX2가 없는 구형·보급형 CPU 포함)에서도 돌도록 CPU 세대별 엔진을 모두 만들고,
+        # 실행할 때 그 PC에 맞는 것을 고른다(gongmun_ai.llm.load_cpu_backend).
         env:
-          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
         run: python -m pip install --no-cache-dir llama-cpp-python
 
       - name: 프로그램 설치와 테스트
@@ -38,19 +39,20 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: model-cache
-          key: qwen3-4b-q4_k_m
+          key: qwen3-q4_k_m-1.7b-4b
 
       - name: 시험용 AI 모델 받기 (AI모델_받기.bat과 같은 주소)
         shell: bash
         run: |
           mkdir -p model-cache
-          f=model-cache/Qwen3-4B-Q4_K_M.gguf
-          [ -s "$f" ] || curl -fL --retry 3 -o "$f" https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf
-          ls -l "$f"
+          get() { [ -s "model-cache/$1" ] || curl -fL --retry 3 -o "model-cache/$1" "$2"; }
+          get Qwen3-1.7B-Q4_K_M.gguf https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf
+          get Qwen3-4B-Q4_K_M.gguf https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf
+          ls -l model-cache
 
       - name: 실행 파일과 ZIP 만들기 (실제 AI 모델로 자체 점검)
         env:
-          TEST_MODEL: model-cache/Qwen3-4B-Q4_K_M.gguf
+          TEST_MODELS: model-cache/Qwen3-1.7B-Q4_K_M.gguf;model-cache/Qwen3-4B-Q4_K_M.gguf
         run: python packaging/build_windows.py
 
       - uses: actions/upload-artifact@v4
