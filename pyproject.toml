@@ -12,6 +12,8 @@ dependencies = []
 [project.optional-dependencies]
 # 로컬 LLM 실행 엔진 (MIT). 규칙 기반 교정만 쓸 때는 필요 없음.
 llm = ["llama-cpp-python>=0.3"]
+# HWP(한글 97~2022) 읽기·저장과 PDF 읽기. 없으면 HWPX·DOCX·TXT만 다룬다.
+docs = ["python-hwpx>=6.10", "pypdf>=4"]
 
 [project.scripts]
 gongmun = "gongmun_ai.cli:main"
@@ -21,3 +23,6 @@ gongmun-gui = "gongmun_ai.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+gongmun_ai = ["templates/*"]

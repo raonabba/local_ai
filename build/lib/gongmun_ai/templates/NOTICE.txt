@@ -1,0 +1,3 @@
+skeleton.hwpx는 python-hwpx 6.10.0(https://github.com/airmang/python-hwpx)의
+hwpx/data/Skeleton.hwpx를 그대로 가져온 것입니다.
+Copyright 2025-2026 airmang. Apache License 2.0 (LICENSE-python-hwpx.txt).

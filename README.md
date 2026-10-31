@@ -12,7 +12,13 @@
 
 반영된 규칙 전체는 [docs/공문서_작성_규칙.md](docs/공문서_작성_규칙.md)를 참고하세요(「공문서 작성법 길라잡이」(2025. 1. 8.) 기준).
 
-## 바로 써 보기 (윈도우)
+## 설치 없이 쓰기 (윈도우 ZIP)
+
+[Releases](https://github.com/raonabba/local_ai/releases)에서 `공문서AI_윈도우.zip`을 받아 압축을 풀고 `공문서AI.exe`를 실행합니다.
+파이썬도 설치할 필요가 없습니다(실행 파일에 파이썬·AI 엔진·HWP 읽기 기능이 들어 있음). 사용법은 압축 안의 `사용설명.txt`를 보세요.
+ZIP은 `.github/workflows/windows-zip.yml`이 윈도우에서 만들고 실행 파일을 자체 점검한 뒤 올립니다.
+
+## 바로 써 보기 (윈도우, 소스에서)
 
 1. [Python 3.12](https://www.python.org/downloads/windows/)를 설치합니다. 첫 화면에서 **Add python.exe to PATH**를 체크하세요.
 2. **`1_실행.bat`** 을 더블클릭합니다. 인터넷이 없어도 교정과 결재권자 점검을 바로 쓸 수 있습니다.

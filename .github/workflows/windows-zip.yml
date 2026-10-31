@@ -1,0 +1,53 @@
+name: 윈도우 ZIP 만들기
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 도구 설치
+        run: python -m pip install --upgrade pip pyinstaller python-hwpx pypdf
+
+      - name: AI 엔진(llama.cpp) 빌드
+        # 업무용 PC에서 돌도록 빌드 PC 전용 명령어(AVX-512 등)를 끄고 AVX2까지만 쓴다.
+        env:
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+        run: python -m pip install --no-cache-dir llama-cpp-python
+
+      - name: 프로그램 설치와 테스트
+        run: |
+          python -m pip install .
+          python -m unittest discover -s tests -v
+
+      - name: 실행 파일과 ZIP 만들기
+        run: python packaging/build_windows.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 공문서AI_윈도우
+          path: dist/공문서AI_윈도우.zip
+
+      - name: 릴리스에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then tag="build-${GITHUB_RUN_NUMBER}"; fi
+          gh release create "$tag" "dist/공문서AI_윈도우.zip" \
+            --target "${GITHUB_SHA}" --title "공문서AI 윈도우 ($tag)" \
+            --notes "압축을 풀고 공문서AI.exe를 실행하세요. 설치가 필요 없습니다. AI 모델은 AI모델_받기.bat으로 받습니다."
