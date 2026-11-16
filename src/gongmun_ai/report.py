@@ -59,13 +59,29 @@ class Report:
                     for r in t.get("rows") or [] if any(str(c).strip() for c in r)]
             return Table(str(t.get("title", "")).strip(), cols, rows if cols else [])
 
-        sections = []
-        for s in d.get("sections") or []:
-            subs = [Sub(str(x.get("heading", "")).strip(), strs(x.get("paragraphs")), strs(x.get("bullets")),
-                        notes(x.get("notes")), table(x.get("table")))
-                    for x in s.get("subs") or []]
-            sections.append(Section(str(s.get("title", "")).strip(), subs))
-        return cls(str(d.get("title", "")).strip(), strs(d.get("summary")), sections)
+        def sub(x) -> Sub:
+            bullets, extra_notes = strs(x.get("bullets")), []
+            # 간결한 형식(AI 초안): items 하나에 ○ 항목과 '※ 참고'를 함께 받는다.
+            for item in strs(x.get("items")):
+                (extra_notes if item.startswith("※") else bullets).append(item)
+            return Sub(str(x.get("heading", "")).strip(), strs(x.get("paragraphs")), bullets,
+                       notes(x.get("notes")) + notes(extra_notes), table(x.get("table")))
+
+        sections = [Section(str(s.get("title", "")).strip(), [sub(x) for x in s.get("subs") or []])
+                    for s in d.get("sections") or []]
+        rep = cls(str(d.get("title", "")).strip(), strs(d.get("summary")), sections)
+        if t := table(d.get("table")):
+            rep._place_table(t)
+        return rep
+
+    def _place_table(self, t: Table) -> None:
+        """보고서에 하나만 받은 표를 일정·계획을 다루는 장(없으면 가운데 장)의 마지막 절에 붙인다."""
+        subs_by_section = [s for s in self.sections if s.subs]
+        if not subs_by_section:
+            return
+        target = next((s for s in subs_by_section if any(k in s.title for k in ("계획", "일정", "추진"))),
+                      subs_by_section[min(1, len(subs_by_section) - 1)])
+        target.subs[-1].table = t
 
     def drop_trivial_tables(self) -> None:
         """한두 칸짜리 표(예: 시작일 | 종료일 한 줄)는 항목과 같은 말이라 뺀다. 작은 모델이 절마다 표를 붙이는 버릇이 있다."""
@@ -143,33 +159,29 @@ def _list(max_len: int, max_items: int, min_items: int = 0) -> dict:
     return {"type": "array", "items": _text(max_len), "minItems": min_items, "maxItems": max_items}
 
 
-# 글자 수와 항목 수의 상한을 문법으로 강제한다. 작은 모델이 같은 말을 되풀이하며 끝없이 쓰는 것을 막고,
-# 저사양 PC에서도 작성 시간이 일정하게 짧도록 하기 위해서다(A4 2쪽 안팎).
+# AI 초안용 간결한 형식. 절마다 소제목과 항목(items)만 받고 표는 보고서에 하나만 받는다.
+# 저사양 PC에서는 AI가 쓰는 낱말 하나하나가 시간이라, 빈 문단·참고·표 칸을 절마다 쓰게 하지 않는다.
+# 글자 수와 항목 수의 상한도 문법으로 강제해 같은 말을 되풀이하며 길어지지 않게 한다(A4 2쪽 안팎).
 SCHEMA = {
     "type": "object",
     "properties": {
         "title": _text(40),
-        "summary": _list(60, 4, 2),
+        "summary": _list(60, 3, 2),
         "sections": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
             "type": "object",
             "properties": {
                 "title": _text(20),
                 "subs": {"type": "array", "minItems": 1, "maxItems": 2, "items": {
                     "type": "object",
-                    "properties": {
-                        "heading": _text(20),
-                        "paragraphs": _list(150, 1),
-                        "bullets": _list(60, 4, 1),
-                        "notes": _list(60, 1),
-                        "table": {"type": "object", "properties": {
-                            "title": _text(20),
-                            "columns": _list(10, 5),
-                            "rows": {"type": "array", "maxItems": 5, "items": _list(30, 5)}},
-                            "required": ["title", "columns", "rows"]},
-                    },
-                    "required": ["heading", "paragraphs", "bullets", "notes", "table"]}},
+                    "properties": {"heading": _text(20), "items": _list(60, 4, 2)},
+                    "required": ["heading", "items"]}},
             },
             "required": ["title", "subs"]}},
+        "table": {"type": "object", "properties": {
+            "title": _text(20),
+            "columns": _list(10, 4),
+            "rows": {"type": "array", "maxItems": 5, "items": _list(30, 4)}},
+            "required": ["title", "columns", "rows"]},
     },
-    "required": ["title", "summary", "sections"],
+    "required": ["title", "summary", "sections", "table"],
 }

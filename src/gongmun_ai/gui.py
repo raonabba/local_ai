@@ -256,9 +256,15 @@ class App:
             log_error(f"AI 모델 불러오기 실패: {path}")
             self._after_status(f"AI 모델을 불러오지 못했습니다: {e}")
             return
+        mode = "저사양 모드" if backend.low_spec else "일반 모드"
+        self._after_status(f"AI 지침을 미리 읽는 중입니다 ({mode})... 첫 초안이 빨라집니다.")
+        try:
+            backend.warm_up(writer.warm_up_text())
+        except Exception:  # 미리 읽기는 속도를 위한 것이라, 실패해도 그대로 쓴다
+            log_error("AI 지침 미리 읽기 실패")
         self.backend = backend
         self.model_state = "ready"
-        self._after_status(f"AI 준비 완료: {path.name}  |  엔진: {backend.cpu}  |  외부 통신 차단됨")
+        self._after_status(f"AI 준비 완료: {path.name} ({mode})  |  엔진: {backend.cpu}  |  외부 통신 차단됨")
 
     def _reload_model(self) -> None:
         self.model_state = "loading"

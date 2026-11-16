@@ -64,13 +64,15 @@ def self_test() -> int:
         for path in sorted((app_root() / "models").glob("*.gguf"), key=lambda p: p.stat().st_size):
             t0 = time.time()
             backend = LlamaCppBackend(path)
+            backend.warm_up(writer.warm_up_text())  # 화면 프로그램과 같게 지침을 미리 읽힘
             t1 = time.time()
             rep, result = writer.draft_report(backend, "2026년 국정감사 수감 준비 계획 보고서. 대상은 본부 및 소속기관.")
             t2 = time.time()
             report_hwpx(rep, Settings()).save(Path(tempfile.mkdtemp()) / "ai.hwpx")
             lines.append(f"----- {path.name} 초안 -----\n" + result.text
                          + "\n----- 주의 -----\n" + "\n".join(result.warnings))
-            results.append(f"{path.name}: 불러오기 {t1 - t0:.0f}초, 초안 {t2 - t1:.0f}초, "
+            results.append(f"{path.name}({'저사양' if backend.low_spec else '일반'} 모드): "
+                           f"불러오기·지침 읽기 {t1 - t0:.0f}초, 초안 {t2 - t1:.0f}초, "
                            f"장 {len(rep.sections)}개 · 절 {sum(len(s.subs) for s in rep.sections)}개")
             del backend
         if not results:

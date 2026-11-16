@@ -92,6 +92,7 @@ def repair_truncated_json(text: str) -> str:
 class LlamaCppBackend:
     def __init__(self, model_path: str | Path, n_ctx: int = 6144,
                  n_threads: int | None = None, n_gpu_layers: int = 0):
+        """n_threads를 주지 않으면 물리 코어 수만큼 쓴다(하이퍼스레딩까지 쓰면 2코어 노트북에서 오히려 느려짐)."""
         try:
             from llama_cpp import Llama
         except ImportError as e:
@@ -103,12 +104,21 @@ class LlamaCppBackend:
                 raise ValueError(f"{model_path.name}: GGUF 모델 파일이 아닙니다(받다가 끊겼거나 다른 파일).")
         self.cpu = load_cpu_backend()
         self.progress = None  # 작성 중 글자 수를 알려 받을 함수(화면의 진행 표시용)
+        self.low_spec = is_low_spec()
+        threads, batch_threads = thread_counts()
         self._llm = Llama(model_path=_engine_path(model_path), n_ctx=n_ctx,
-                          n_threads=n_threads or os.cpu_count(),
+                          n_threads=n_threads or threads, n_threads_batch=batch_threads,
                           n_gpu_layers=n_gpu_layers, verbose=False)
         # Qwen3는 답하기 전에 길게 '생각'하는데, CPU에서는 몇 분씩 걸리므로 끈다.
         self.no_think = "qwen3" in Path(model_path).name.lower()
         self.name = Path(model_path).name
+
+    def warm_up(self, system: str) -> None:
+        """자주 쓰는 지침(system)을 미리 읽혀 둔다. 엔진은 앞부분이 같은 요청이면 다시 읽지 않으므로,
+        저사양 PC에서 첫 초안을 시작하기까지의 시간이 줄어든다."""
+        self._llm.create_chat_completion(
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": "준비"}],
+            max_tokens=1, temperature=0)
 
     def chat(self, messages, *, json_schema=None, max_tokens=1024, temperature=0.3):
         if self.no_think:
@@ -153,12 +163,20 @@ def load_cpu_backend() -> str:
     if not list(lib_dir.glob("*ggml-cpu-*")):
         _cpu_backend = "기본"
         return _cpu_backend
-    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
-    libggml.ggml_backend_load_all_from_path(str(_engine_path(lib_dir)).encode("utf-8"))
+    forced = os.environ.get("GONGMUN_CPU_VARIANT")  # 시험용: 특정 CPU 세대 엔진을 강제(예: sandybridge)
+    if forced:
+        name = f"ggml-cpu-{forced}.dll" if sys.platform == "win32" else f"libggml-cpu-{forced}.so"
+        libggml.ggml_backend_load.argtypes = [ctypes.c_char_p]
+        libggml.ggml_backend_load.restype = ctypes.c_void_p
+        if not libggml.ggml_backend_load(_engine_path(lib_dir / name).encode("utf-8")):
+            raise RuntimeError(f"{name}을(를) 불러오지 못했습니다.")
+    else:
+        libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+        libggml.ggml_backend_load_all_from_path(str(_engine_path(lib_dir)).encode("utf-8"))
     libggml.ggml_backend_dev_count.restype = ctypes.c_size_t
     if libggml.ggml_backend_dev_count() == 0:
         raise RuntimeError("이 PC의 CPU에 맞는 AI 엔진을 찾지 못했습니다.")
-    _cpu_backend = _device_name(libggml, lib_dir)
+    _cpu_backend = _device_name(libggml, lib_dir) + (f" [{forced}]" if forced else "")
     return _cpu_backend
 
 
@@ -203,6 +221,34 @@ def total_memory_gb() -> float:
         return 0.0
 
 
+def has_avx2() -> bool:
+    """CPU가 AVX2를 지원하는지. 2013년 이전·보급형 CPU(예: i5-3337U)는 지원하지 않아 AI가 몇 배 느리다."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))  # PF_AVX2_INSTRUCTIONS_AVAILABLE
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
+            return " avx2" in f.read()
+    except (OSError, AttributeError):
+        return True
+
+
+def thread_counts() -> tuple[int, int]:
+    """(글 생성용, 지침 읽기용) 스레드 수. 생성은 물리 코어 수(논리 코어의 절반)가 가장 빠르다."""
+    logical = os.cpu_count() or 2
+    forced = os.environ.get("GONGMUN_THREADS")  # 시험용: 저사양 PC 흉내
+    if forced:
+        return int(forced), int(forced)
+    return max(1, logical // 2), logical
+
+
+def is_low_spec() -> bool:
+    """저사양 PC인지: AVX2가 없거나, 물리 코어가 2개 이하이거나, 메모리가 8GB 미만."""
+    memory = total_memory_gb()
+    return (not has_avx2() or thread_counts()[0] <= 2 or 0 < memory < 7.5
+            or bool(os.environ.get("GONGMUN_CPU_VARIANT")))
+
+
 def _engine_path(path: Path) -> str:
     """AI 엔진에 넘길 경로. 윈도우에서 경로에 한글이 있으면 영문 짧은 경로(8.3)로 바꿔
     엔진이 한글 경로를 못 여는 경우를 피한다. 짧은 경로를 못 얻으면 원래 경로를 쓴다."""
@@ -217,6 +263,8 @@ def _engine_path(path: Path) -> str:
 
 class ScriptedBackend:
     """테스트와 시연용: 미리 정한 답을 차례로 돌려준다."""
+
+    low_spec = False
 
     def __init__(self, *responses: str):
         self.responses = list(responses)
@@ -244,10 +292,10 @@ def find_model(explicit: str | None = None, folder: str | Path = "models") -> Pa
     if not found:
         raise FileNotFoundError(
             "모델 파일(.gguf)을 찾지 못했습니다. models/ 폴더에 넣거나 --model로 지정하세요.")
-    return choose_model(found, total_memory_gb())
+    return choose_model(found, is_low_spec())
 
 
-def choose_model(models: list[Path], memory_gb: float) -> Path:
-    """모델이 여럿이면 메모리에 맞는 것: 8GB 미만이면 가장 작은 것, 아니면 가장 큰 것."""
+def choose_model(models: list[Path], low_spec: bool) -> Path:
+    """모델이 여럿이면 PC에 맞는 것: 저사양이면 가장 작은 것(빠름), 아니면 가장 큰 것(문장이 좋음)."""
     by_size = sorted(models, key=lambda p: p.stat().st_size)
-    return by_size[0] if 0 < memory_gb < 7.5 else by_size[-1]
+    return by_size[0] if low_spec else by_size[-1]

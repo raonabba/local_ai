@@ -434,9 +434,40 @@ class ReportModelTest(unittest.TestCase):
             small, big = Path(d) / "a-1.7b.gguf", Path(d) / "b-4b.gguf"
             small.write_bytes(b"GGUF" + b"0" * 10)
             big.write_bytes(b"GGUF" + b"0" * 100)
-            self.assertEqual(choose_model([big, small], 4.0), small)
-            self.assertEqual(choose_model([small, big], 16.0), big)
-            self.assertEqual(choose_model([small, big], 0), big)  # 메모리를 모르면 큰 것
+            self.assertEqual(choose_model([big, small], True), small)   # 저사양: 작고 빠른 것
+            self.assertEqual(choose_model([small, big], False), big)    # 일반: 문장이 좋은 것
+
+
+class CompactReportTest(unittest.TestCase):
+    def test_items_and_single_table(self):
+        from gongmun_ai.report import Report
+        rep = Report.from_dict({
+            "title": "교육 계획", "summary": ["보고임."],
+            "sections": [
+                {"title": "개요", "subs": [{"heading": "목적", "items": ["역량 강화", "※ 참고 사항", "※ 자세한 일정은 따로 알림"]}]},
+                {"title": "추진 계획", "subs": [{"heading": "일정", "items": ["3월 시행", "- 1주차 이론"]}]},
+                {"title": "행정 사항", "subs": [{"heading": "협조", "items": ["담당자 지정"]}]}],
+            "table": {"title": "교육 일정", "columns": ["주차", "내용"], "rows": [["1", "이론"], ["2", "실습"]]}})
+        s0, s1 = rep.sections[0].subs[0], rep.sections[1].subs[0]
+        self.assertEqual(s0.bullets, ["역량 강화"])
+        self.assertEqual(s0.notes, ["자세한 일정은 따로 알림"])  # 빈 '참고 사항'은 빠짐
+        self.assertEqual(s1.bullets, ["3월 시행", "- 1주차 이론"])
+        self.assertEqual(s1.table.title, "교육 일정")              # 계획 장에 붙음
+        self.assertFalse(rep.sections[2].subs[0].table)
+        empty = Report.from_dict({"title": "t", "summary": [], "sections": [
+            {"title": "개요", "subs": [{"heading": "h", "items": ["a"]}]}],
+            "table": {"title": "", "columns": [], "rows": []}})
+        self.assertFalse(empty.sections[0].subs[0].table)
+
+    def test_compact_schema_compiles(self):
+        try:
+            from llama_cpp.llama_grammar import LlamaGrammar
+        except ImportError:
+            self.skipTest("llama-cpp-python 없음")
+        from gongmun_ai.gianmun import SCHEMA as G
+        from gongmun_ai.report import SCHEMA as R
+        for schema in (R, G):
+            LlamaGrammar.from_json_schema(json.dumps(schema), verbose=False)
 
 
 class ReportDraftTest(unittest.TestCase):

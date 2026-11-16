@@ -74,6 +74,14 @@ def fact_warnings(source: str, output: str) -> list[str]:
 
 # ---------------------------------------------------------------- 작업
 
+REPORT_GUIDE = ("principles", "structure")
+
+
+def warm_up_text() -> str:
+    """보고서 초안의 고정 지침(시스템 메시지 앞부분). 모델을 불러올 때 미리 읽혀 두면 첫 초안이 빨라진다."""
+    return SYSTEM + "\n\n" + prompt_guide(REPORT_GUIDE)
+
+
 def _messages(user: str, profile: Profile | None,
               guide: tuple[str, ...] = ("principles",), learned: str = "") -> list[dict]:
     system = SYSTEM + "\n\n" + prompt_guide(guide)
@@ -84,19 +92,21 @@ def _messages(user: str, profile: Profile | None,
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _with_knowledge(request: str, references: list[tuple[str, str]] | None, kb) -> tuple[list, str]:
+def _with_knowledge(request: str, references: list[tuple[str, str]] | None, kb,
+                    low_spec: bool = False) -> tuple[list, str]:
     """사용자가 고른 참고 문서에 지식 DB에서 찾은 관련 문단과 배운 문서 습관을 더한다."""
     refs = list(references or [])
     if kb is None:
         return refs, ""
-    refs += [(f"학습한 문서: {name}", text) for name, text in kb.search(request, k=3)]
+    refs += [(f"학습한 문서: {name}", text) for name, text in kb.search(request, k=2 if low_spec else 3)]
     return refs, kb.style_hints()
 
 
-def _reference_block(references: list[tuple[str, str]]) -> str:
+def _reference_block(references: list[tuple[str, str]], low_spec: bool = False) -> str:
+    """참고 문서를 프롬프트에 넣을 만큼 잘라 붙인다. 저사양 PC는 AI가 읽는 데도 시간이 걸려 절반만 넣는다."""
     if not references:
         return ""
-    budget = MAX_REFERENCE_CHARS // len(references)
+    budget = (MAX_REFERENCE_CHARS // 2 if low_spec else MAX_REFERENCE_CHARS) // len(references)
     return "\n\n[참고 문서]\n" + "\n\n".join(f"<{name}>\n{body[:budget]}" for name, body in references)
 
 
@@ -136,9 +146,10 @@ def draft(backend: Backend, request: str, profile: Profile | None = None,
           references: list[tuple[str, str]] | None = None,
           tone: str = "보고서", kb=None) -> tuple[Gianmun, Result]:
     """요청과 참고 문서로 기안문 초안을 만든다. references는 (이름, 내용) 목록, kb는 지식 DB."""
-    references, learned = _with_knowledge(request, references, kb)
+    low = getattr(backend, "low_spec", False)
+    references, learned = _with_knowledge(request, references, kb, low)
     prompt = (
-        f"다음 요청에 맞는 기안문 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references)}\n\n"
+        f"다음 요청에 맞는 기안문 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references, low)}\n\n"
         "작성 방법:\n"
         "- title: 한 가지 안건만 담고 본문 전체를 포괄하는 짧은 제목\n"
         "- recipient: 수신자(내부 보고면 '내부결재')\n"
@@ -162,23 +173,23 @@ def draft(backend: Backend, request: str, profile: Profile | None = None,
 def draft_report(backend: Backend, request: str, profile: Profile | None = None,
                  references: list[tuple[str, str]] | None = None, kb=None) -> tuple[Report, Result]:
     """붙임용 보고서(표지 + Ⅰ·Ⅱ·Ⅲ 장) 초안."""
-    references, learned = _with_knowledge(request, references, kb)
+    low = getattr(backend, "low_spec", False)
+    references, learned = _with_knowledge(request, references, kb, low)
     prompt = (
-        f"다음 요청에 맞는 보고서 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references)}\n\n"
+        f"다음 요청에 맞는 보고서 내용을 JSON으로 작성하세요.\n[요청]\n{request}{_reference_block(references, low)}\n\n"
         "작성 방법:\n"
         "- title: 표지에 들어갈 보고서 제목(예: '2026년 ○○ 추진 계획')\n"
-        "- summary: 표지 요약 상자 2~4줄. 첫 줄은 '~ 보고임.'으로 끝내고, 다음 줄은 '기간: ~', '대상: ~'처럼 쓴다\n"
+        "- summary: 표지 요약 상자 2~3줄. 첫 줄은 '~ 보고임.'으로 끝내고, 다음 줄은 '기간: ~', '대상: ~'처럼 쓴다\n"
         "- sections: 3개 장(예: 개요, 추진 계획, 행정 사항). 장마다 subs(절) 1~2개\n"
-        "- 분량: 절마다 bullets 2~4개, 각 항목은 40자 안팎의 한 줄. 같은 문장을 되풀이하지 않는다\n"
-        "- subs: heading은 짧은 소제목이며 다른 절과 겹치지 않게 쓴다. "
-        "내용은 bullets(○ 항목, 한 줄씩 짧게, '- '로 시작하면 하위 항목) 위주로 쓰고, "
-        "paragraphs(서술 문단)는 꼭 필요할 때만 한 문단. notes는 ※ 참고 사항(※는 빼고)\n"
-        "- table: 일정·인원·예산처럼 여러 줄을 견줄 때만, 보고서 전체에서 1~2개만 쓴다. 나머지 절은 모두 빈 값\n"
+        "- subs: heading은 짧은 소제목이며 다른 절과 겹치지 않게 쓴다. items는 ○ 항목으로 한 줄씩 짧게 쓰고, "
+        "'- '로 시작하면 하위 항목, '※'로 시작하면 참고 사항이 된다\n"
+        "- 분량: 절마다 items 2~4개, 각 항목은 40자 안팎. 같은 문장을 되풀이하지 않는다\n"
+        "- table: 일정·인원·예산처럼 여러 줄을 견줄 때만 보고서 전체에 하나 채우고, 아니면 모두 빈 값\n"
         "- 모든 문장은 '~함', '~임', '~할 계획임'처럼 명사형으로 끝낸다('~합니다' 금지)\n"
         "- 장·절 번호(Ⅰ, 1.)는 쓰지 마세요. 서식은 프로그램이 붙입니다\n"
         "- 참고 문서에 없는 숫자·인명은 쓰지 말고 '○○'으로 비워 두세요."
     )
-    out = backend.chat(_messages(prompt, profile, ("principles", "structure"), learned),
+    out = backend.chat(_messages(prompt, profile, REPORT_GUIDE, learned),
                        json_schema=REPORT_SCHEMA, max_tokens=2500, temperature=0.4)
     rep = Report.from_dict(parse_json(out))
     rep.merge_duplicate_headings()

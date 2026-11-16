@@ -52,17 +52,25 @@ def assemble() -> None:
 
 def self_test() -> None:
     """만든 실행 파일이 실제로 동작하는지 창 없이 점검한다.
-    환경변수 TEST_MODELS(';'로 구분)의 모델 파일을 한글 경로의 models 폴더에 잠시 넣고 실제 AI 초안까지 써 본다."""
-    args = [str(APP / "공문서AI.exe"), "--self-test"]
+    환경변수 TEST_MODELS(';'로 구분)의 모델을 한글 경로의 models 폴더에 잠시 넣고 실제 AI 초안까지 써 본다.
+    이어서 AVX2가 없는 2코어 노트북(예: i5-3337U)을 흉내 내어 저사양용 모델로 한 번 더 써 본다."""
+    models = [Path(m) for m in filter(None, os.environ.get("TEST_MODELS", "").split(";")) if Path(m).is_file()]
+    _run_self_test(models, {}, "일반")
+    if models:
+        smallest = min(models, key=lambda p: p.stat().st_size)
+        _run_self_test([smallest], {"GONGMUN_CPU_VARIANT": "sandybridge", "GONGMUN_THREADS": "2"},
+                       "저사양 흉내(AVX2 없음·2코어)")
+
+
+def _run_self_test(models: list[Path], env: dict, label: str) -> None:
+    print(f"===== 자체 점검: {label} =====")
+    args = [str(APP / "공문서AI.exe"), "--self-test"] + (["--ai"] if models else [])
     placed = []
-    for model in filter(None, os.environ.get("TEST_MODELS", "").split(";")):
-        if Path(model).is_file():
-            placed.append(APP / "models" / Path(model).name)
-            shutil.copy(model, placed[-1])
-    if placed:
-        args.append("--ai")
+    for model in models:
+        placed.append(APP / "models" / model.name)
+        shutil.copy(model, placed[-1])
     try:
-        result = subprocess.run(args, timeout=2400)
+        result = subprocess.run(args, timeout=2400, env={**os.environ, **env})
     finally:
         for p in placed:
             p.unlink(missing_ok=True)  # 모델은 ZIP에 넣지 않는다(따로 받음)
@@ -71,7 +79,7 @@ def self_test() -> None:
     print(text)
     report.unlink(missing_ok=True)
     if result.returncode != 0:
-        raise SystemExit("자체 점검 실패")
+        raise SystemExit(f"자체 점검 실패: {label}")
 
 
 def make_zip() -> None:
