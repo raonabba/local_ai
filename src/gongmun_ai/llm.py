@@ -164,15 +164,18 @@ def load_cpu_backend() -> str:
         _cpu_backend = "기본"
         return _cpu_backend
     forced = os.environ.get("GONGMUN_CPU_VARIANT")  # 시험용: 특정 CPU 세대 엔진을 강제(예: sandybridge)
+    search_dir = lib_dir
     if forced:
+        # 그 엔진 파일 하나만 든 영문 임시 폴더를 만들어 같은 방식으로 불러온다.
+        # (ggml_backend_load는 윈도우에서 경로를 ANSI로 읽어 '공문서AI' 같은 한글 경로를 못 연다.)
+        import shutil
+        import tempfile
         name = f"ggml-cpu-{forced}.dll" if sys.platform == "win32" else f"libggml-cpu-{forced}.so"
-        libggml.ggml_backend_load.argtypes = [ctypes.c_char_p]
-        libggml.ggml_backend_load.restype = ctypes.c_void_p
-        if not libggml.ggml_backend_load(_engine_path(lib_dir / name).encode("utf-8")):
-            raise RuntimeError(f"{name}을(를) 불러오지 못했습니다.")
-    else:
-        libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
-        libggml.ggml_backend_load_all_from_path(str(_engine_path(lib_dir)).encode("utf-8"))
+        search_dir = Path(tempfile.gettempdir()) / f"gongmun-cpu-{forced}"
+        search_dir.mkdir(exist_ok=True)
+        shutil.copy(lib_dir / name, search_dir / name)
+    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+    libggml.ggml_backend_load_all_from_path(str(_engine_path(search_dir)).encode("utf-8"))
     libggml.ggml_backend_dev_count.restype = ctypes.c_size_t
     if libggml.ggml_backend_dev_count() == 0:
         raise RuntimeError("이 PC의 CPU에 맞는 AI 엔진을 찾지 못했습니다.")
